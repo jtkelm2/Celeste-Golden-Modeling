@@ -26,11 +26,6 @@ class Strategy(ABC):
     def update(self, success: bool):
         """Update internal state after attempt."""
         pass
-    
-    @abstractmethod
-    def is_complete(self) -> bool:
-        """Check if strategy has achieved its goal (full deathless run)."""
-        pass
 
 
 class NaiveGrind(Strategy):
@@ -52,11 +47,10 @@ class NaiveGrind(Strategy):
     def update(self, success: bool):
         if success:
             self.current_idx += 1
+            if self.current_idx >= len(self.room_names):
+                self.current_idx = 0
         else:
             self.current_idx = 0
-    
-    def is_complete(self) -> bool:
-        return self.current_idx >= len(self.room_names)
 
 
 class CyclicGrind(Strategy):
@@ -68,7 +62,6 @@ class CyclicGrind(Strategy):
     def __init__(self, room_names: List[str]):
         self.room_names = room_names
         self.current_idx = 0
-        self.consecutive_successes = []
     
     @property
     def name(self) -> str:
@@ -78,17 +71,7 @@ class CyclicGrind(Strategy):
         return self.room_names[self.current_idx]
     
     def update(self, success: bool):
-        room = self.room_names[self.current_idx]
-        if success:
-            self.consecutive_successes.append(room)
-        else:
-            self.consecutive_successes = []
         self.current_idx = (self.current_idx + 1) % len(self.room_names)
-    
-    def is_complete(self) -> bool:
-        if len(self.consecutive_successes) < len(self.room_names):
-            return False
-        return self.consecutive_successes[-len(self.room_names):] == self.room_names
 
 
 class BackwardLearning(Strategy):
@@ -122,19 +105,12 @@ class BackwardLearning(Strategy):
             self.current_idx += 1
             # Completed current sequence?
             if self.current_idx >= len(self.room_names):
-                if self.sequence_start == 0:
-                    # Full clear achieved - leave current_idx at end to signal completion
-                    return
                 # Expand sequence by chunk_size rooms
                 self.sequence_start = max(0, self.sequence_start - self.chunk_size)
                 self.current_idx = self.sequence_start
         else:
             # Reset to start of current sequence
             self.current_idx = self.sequence_start
-    
-    def is_complete(self) -> bool:
-        # Complete when we've done 0 to N-1 in one streak
-        return self.sequence_start == 0 and self.current_idx >= len(self.room_names)
 
 
 class Semiomniscient(Strategy):
@@ -216,7 +192,7 @@ class Semiomniscient(Strategy):
     def get_next_room(self) -> str:
         if self.mode == 'training':
             best_room = None
-            best_net = 0
+            best_net = 10
             
             for room in self.room_names:
                 benefit, cost = self._compute_benefit_cost(room)
@@ -240,15 +216,15 @@ class Semiomniscient(Strategy):
             return room
     
     def update(self, success: bool):
+        assert self._last_room is not None
         self.attempt_counts[self._last_room] += 1
         
         if self.mode == 'full_clear':
             if success:
                 self.current_idx += 1
+                if self.current_idx >= len(self.room_names):
+                    self.current_idx = 0
             else:
                 self.current_idx = 0
         
         self._update_cache()
-    
-    def is_complete(self) -> bool:
-        return self.mode == 'full_clear' and self.current_idx >= len(self.room_names)

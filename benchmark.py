@@ -18,7 +18,7 @@ def run_benchmark(
     plots_dir: str,
     data_dir: str,
     n_simulations: int = 1000,
-    chunk_sizes: List[int] = None
+    chunk_sizes: List[int] | None = None
 ):
     """
     Run benchmarks on all strategies and generate plots.
@@ -137,7 +137,7 @@ def _create_plots(
     
     for i, (key, result) in enumerate(results.items()):
         times_hours = np.array(result['all_times']) / 3600
-        ax.hist(times_hours, alpha=0.4, bins=50, label=result['strategy'],
+        ax.hist(times_hours, alpha=0.4, bins=15, label=result['strategy'],
                 color=colors[i], density=True)
         # Mean line
         mean_hours = result['mean_time'] / 3600
