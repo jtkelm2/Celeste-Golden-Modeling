@@ -10,7 +10,9 @@ Have you ever wondered whether you were grinding for golden strawberries the rig
 
 This project fits logistic regression models to gameplay attempt data from Celeste's golden strawberry challenges. It uses these models to simulate and compare different practice strategies, determining which approaches minimize expected completion time.
 
-**Basically:** as players practice difficult rooms, their probability of success increases over time. By modeling this learning curve for each room, we can evaluate whether targeted practice of weak rooms or other strategies are more efficient than naive grinding.
+**Basically:** As players practice difficult rooms, their probability of success increases over time. By modeling this learning curve for each room, we can evaluate whether targeted practice of weak rooms or other strategies are more efficient than naive grinding.
+
+Included is my own example data (attempt sequence + timings) on grinding Chapter 8BG. I have additionally tested it on 7BG. If anyone would like to help contribute their own data or strategy ideas, please reach out.
 
 ## Features
 
@@ -18,6 +20,17 @@ This project fits logistic regression models to gameplay attempt data from Celes
 - **Visualization**: Generates plots showing learning progression for individual rooms and comparative analysis across all rooms
 - **Strategy simulation**: Monte Carlo simulation of different practice approaches
 - **Strategy comparison**: Statistical comparison of expected completion times across strategies
+
+## Strategies
+
+The framework implements and compares the following practice strategies:
+
+1. **Naive Grind**: Attempt full runs from start; reset to first room on any death
+2. **Cyclic Grind**: Continuously do full-chapter playthroughs without resets, until a zero death run is achieved
+3. **Backward Learning**: Master final rooms first, gradually prepend earlier rooms (cf. advice given by [Parrot Dash](https://www.youtube.com/watch?v=jHVItGam5vA))
+4. **Semiomniscient**: Dynamically choose between targeted practice and full run attempts based on mathematically expected benefit
+
+Based on my own limited data collected so far, it would appear that the hierarchy is **semiomniscient > "human intuition" (my actual strats) > small-chunk backward learning > cyclic grind > large-chunk backward learning >>> naive grind**.
 
 ## Installation
 
@@ -95,15 +108,6 @@ Maps room IDs to completion times in seconds:
 
 For each room, this is the amount of time a successful run-through of that room is expected to take. (See *Assumptions and Limitations* below.)
 
-## Strategies
-
-The framework implements and compares the following practice strategies:
-
-1. **Naive Grind**: Attempt full runs from start; reset to first room on any death
-2. **Cyclic Grind**: Practice rooms in order, cycling continuously without resets
-3. **Backward Learning**: Master final rooms first, gradually prepend earlier rooms
-4. **Semiomniscient**: Uses fitted models to dynamically choose between targeted practice and full run attempts based on expected benefit
-
 ## Output
 
 ### Analysis Outputs
@@ -162,6 +166,8 @@ The math relies on several simplifying assumptions that may not fully capture th
 - Mental factors are not modeled, such as performance anxiety, or the psychological and nutritional impact of long grinding sessions.
 - The framework does not account for meta-strategic decisions like when to take breaks or how loud to scream at 2am when a pink cloud eats your jump.
 
-## License
+## License and Disclosure
 
 This project is provided as-is for analysis and educational purposes. I stake no claim and deem this free to use or modify however, without attribution.
+
+Much of this codebase was vibecoded with Claude, but has been audited and edited line-by-line by me. I take responsibility for any bugs or design mistakes present.
