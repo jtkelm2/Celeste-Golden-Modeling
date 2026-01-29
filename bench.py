@@ -42,7 +42,7 @@ for chunk_size in chunk_library_sizes:
   chunk_library.append(custom_chunks.copy())
 
 # Set simulation parameters
-N_SIMULATIONS = 1000
+N_SIMULATIONS = 10
 print(f"\n{'='*80}")
 print(f"RUNNING BENCHMARKS WITH {N_SIMULATIONS} SIMULATIONS EACH")
 print(f"{'='*80}\n")
@@ -52,12 +52,12 @@ results = {}
 
 # 1. Naive Grind
 print("1. Testing Naive Grind Strategy...")
-# results['naive'] = monte_carlo_benchmark(
-#     NaiveGrind,
-#     (room_names,),
-#     model_params,
-#     N_SIMULATIONS
-# )
+results['naive'] = monte_carlo_benchmark(
+    NaiveGrind,
+    (room_names,),
+    model_params,
+    N_SIMULATIONS
+)
 
 # 2. Cyclic Grind
 print("\n2. Testing Cyclic Grind Strategy...")
@@ -69,23 +69,23 @@ results['cyclic'] = monte_carlo_benchmark(
 )
 
 # 3. Backward Learning
-# print("\n3. Testing Backward Learning Strategy...")
-# results['backward'] = monte_carlo_benchmark(
-#     BackwardLearning,
-#     (room_names,),
-#     model_params,
-#     N_SIMULATIONS
-# )
+print("\n3. Testing Backward Learning Strategy...")
+results['backward'] = monte_carlo_benchmark(
+    BackwardLearning,
+    (room_names,),
+    model_params,
+    N_SIMULATIONS
+)
 
 # # 4. Backward Chunk Learning
-# for chunk_size, chunks in zip(chunk_library_sizes, chunk_library):
-#   print(f"\n4. Testing Backward Chunk Learning Strategy ({chunk_size})...")
-#   results[f'backward_chunks_{chunk_size}'] = monte_carlo_benchmark(
-#       BackwardChunkLearning,
-#       (room_names, chunks, f"{chunk_size}"),
-#       model_params,
-#       N_SIMULATIONS
-#   )
+for chunk_size, chunks in zip(chunk_library_sizes, chunk_library):
+  print(f"\n4. Testing Backward Chunk Learning Strategy ({chunk_size})...")
+  results[f'backward_chunks_{chunk_size}'] = monte_carlo_benchmark(
+      BackwardChunkLearning,
+      (room_names, chunks, f"{chunk_size}"),
+      model_params,
+      N_SIMULATIONS
+  )
 
 # 5. Semiomniscient Learning
 print("\n5. Testing Semiomniscient Learning Strategy...")

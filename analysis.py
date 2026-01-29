@@ -1,25 +1,20 @@
 #!/usr/bin/env python3
-"""
-Celeste Gameplay Analysis - Probability of Survival by Room
-Fits logistic regression models to estimate survival probability over time
-"""
 
 import json
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
-from scipy.special import expit  # logistic function
+from scipy.special import expit
 import os
 
 input_dir = 'inputs'
 data_dir = 'data'
 plots_dir = 'plots'
 
-# Create directories
 os.makedirs(plots_dir, exist_ok=True)
 os.makedirs(data_dir, exist_ok=True)
+os.makedirs(plots_dir, exist_ok=True)
 
-# Read the data
 with open(os.path.join(input_dir, 'attempts.json'), 'r') as f:
     data = json.load(f)
 
