@@ -12,7 +12,7 @@ This project fits logistic regression models to gameplay attempt data from Celes
 
 **Basically:** As players practice difficult rooms, their probability of success increases over time. By modeling this learning curve for each room, we can evaluate whether targeted practice of weak rooms or other strategies are more efficient than naive grinding.
 
-Included is my own example data (attempt sequence + timings) on grinding Chapter 8BG. I have additionally tested it on 7BG. If anyone would like to help contribute their own data or strategy ideas, please reach out.
+Included is my own example data (attempt sequence + timings) on grinding Chapter 8BG, obtained through a modded version of the [Consistency Tracker Mod](https://github.com/viddie/ConsistencyTrackerMod). I have additionally analyzed my data on 7BG. If anyone would like to help contribute their own data or strategy ideas, please reach out.
 
 ## Features
 
@@ -151,7 +151,7 @@ Models are fit via maximum likelihood estimation. If a negative learning rate is
 The math relies on several simplifying assumptions that may not fully capture the complexity of skill acquisition in practice:
 
 **Learning Model Assumptions**:
-- Success probability follows a monotonic logistic curve over attempts. In reality, players may experience plateaus, temporary regression, fatigue effects, or non-linear breakthroughs when they finally take a single second to realize they want a diagonal dash instead of an updash.
+- Success probability follows a monotonic logistic curve over attempts. In reality, players may experience plateaus, temporary regression, fatigue effects, or non-linear breakthroughs when they finally take a single goddamn second to realize they want a diagonal dash at this part instead of an updash.
 - It is said you learn more when you fail than when you succeed. Regardless, a successful attempt sees equal progression along the learning curve as a failed attempt.
 - Each attempt is independent given the attempt number. The model does not account for tilt, warm-up periods, session-to-session variance, or ultra instinct gamer lock-in where you defy statistics to manifest your own escape from this golden berry hell.
 
