@@ -68,8 +68,12 @@ def benchmark(
     """
     times = []
     room_attempts = {room: [] for room in models.room_names}
+    n_simulations_checkpoint = n_simulations // 10
     
     for i in range(n_simulations):
+        if i > 0 and i % n_simulations_checkpoint == 0:
+            print(f"  Completed {i}/{n_simulations} simulations...")
+
         strategy = strategy_class(*strategy_args)
         result = simulate_once(strategy, models)
         

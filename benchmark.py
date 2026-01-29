@@ -137,11 +137,8 @@ def _create_plots(
     
     for i, (key, result) in enumerate(results.items()):
         times_hours = np.array(result['all_times']) / 3600
-        ax.hist(times_hours, alpha=0.4, bins=15, label=result['strategy'],
-                color=colors[i], density=True)
-        # Mean line
-        mean_hours = result['mean_time'] / 3600
-        ax.axvline(mean_hours, color=colors[i], linestyle='-', linewidth=2, alpha=0.8)
+        ax.hist(times_hours, alpha=0.8, label=result['strategy'],
+                color=colors[i])
     
     # Actual result line
     actual_hours = actual_time / 3600
@@ -149,7 +146,7 @@ def _create_plots(
                label=f'Actual ({format_time(actual_time)})')
     
     ax.set_xlabel('Time to Completion (hours)', fontweight='bold')
-    ax.set_ylabel('Density', fontweight='bold')
+    ax.set_ylabel('Count', fontweight='bold')
     ax.set_title('Time Distribution Comparison', fontweight='bold', fontsize=14)
     ax.legend(loc='upper right')
     ax.grid(True, alpha=0.3)
@@ -172,7 +169,12 @@ def _create_plots(
         bar_colors[idx] = plt.cm.RdYlGn_r(rank / (len(mean_times) - 1) * 0.6 + 0.2)
     
     bars = ax.bar(x, mean_times, yerr=std_times, alpha=0.8, capsize=5, color=bar_colors)
-    ax.axhline(actual_hours, color='black', linestyle='--', linewidth=2, label='Actual')
+    ax.axhline(actual_hours, color='black', linestyle='--', linewidth=2, label=f'Actual ({format_time(actual_time)})')
+    
+    # Add numeric labels on bars
+    for i, (bar, mean, std) in enumerate(zip(bars, mean_times, std_times)):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std_times[i] + 0.5,
+                f'{mean:.1f} ± {std:.1f}h', ha='center', va='bottom', fontsize=9, fontweight='bold')
     
     ax.set_xticks(x)
     ax.set_xticklabels(strategy_names, rotation=45, ha='right')
@@ -193,9 +195,14 @@ def _create_plots(
         stds = [results[k]['room_attempts'][room]['std'] for k in results.keys()]
         x = np.arange(len(strategy_names))
         
-        ax.bar(x, means, yerr=stds, alpha=0.7, capsize=5, color='steelblue')
+        bars = ax.bar(x, means, yerr=stds, alpha=0.7, capsize=5, color='steelblue')
         ax.axhline(actual_attempts[room], color='black', linestyle='--', linewidth=2,
                    label=f'Actual ({actual_attempts[room]})')
+        
+        # Add numeric labels on bars
+        for i, (bar, mean, std) in enumerate(zip(bars, means, stds)):
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std + 1,
+                    f'{mean:.0f} ± {std:.0f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
         
         ax.set_xticks(x)
         ax.set_xticklabels(strategy_names, rotation=45, ha='right')

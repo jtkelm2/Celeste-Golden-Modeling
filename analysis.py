@@ -150,7 +150,6 @@ def run_analysis(attempts_path: str, times_path: str, data_dir: str, plots_dir: 
         r = model_params[room_name]
         print(f"ROOM {room_name}")
         print(f"  Attempts: {r['total_attempts']}")
-        print(f"  Time: {r['total_time']:.0f}s")
         print(f"  Model: logit(P) = {r['beta_0']:.3f} + {r['beta_1']:.6f} × t")
         print()
     
