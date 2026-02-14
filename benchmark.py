@@ -173,7 +173,7 @@ def _create_plots(
     
     # Add numeric labels on bars
     for i, (bar, mean, std) in enumerate(zip(bars, mean_times, std_times)):
-        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std_times[i] + 0.5,
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std_times[i] * 1.04,
                 f'{mean:.1f} ± {std:.1f}h', ha='center', va='bottom', fontsize=9, fontweight='bold')
     
     ax.set_xticks(x)
