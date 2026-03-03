@@ -9,7 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Dict, List
 from models import RoomModels, format_time
-from strategies import NaiveGrind, CyclicGrind, BackwardLearning, Semiomniscient
+from strategies import NaiveGrind, CyclicGrind, BackwardLearning, Semiomniscient, WindowedPractice
 from simulator import benchmark
 
 
@@ -18,7 +18,8 @@ def run_benchmark(
     plots_dir: str,
     data_dir: str,
     n_simulations: int = 1000,
-    chunk_sizes: List[int] | None = None
+    chunk_sizes: List[int] | None = None,
+    window_sizes: List[int] | None = None
 ):
     """
     Run benchmarks on all strategies and generate plots.
@@ -29,15 +30,18 @@ def run_benchmark(
         data_dir: Output directory for results JSON
         n_simulations: Number of Monte Carlo simulations
         chunk_sizes: List of chunk sizes for backward learning variants
+        window_sizes: List of K values for windowed practice sweep
     """
     os.makedirs(plots_dir, exist_ok=True)
     os.makedirs(data_dir, exist_ok=True)
     
-    if chunk_sizes is None:
-        chunk_sizes = [7]
-    
     models = RoomModels(model_params)
     room_names = models.room_names
+
+    if chunk_sizes is None:
+        chunk_sizes = [len(room_names) // 5]
+    if window_sizes is None:
+        window_sizes = [3, 5, 7, 10, 15, 20]
     
     # Calculate actual results from data
     actual_time = sum(model_params[r]['total_time'] for r in room_names)
@@ -60,6 +64,11 @@ def run_benchmark(
     for chunk_size in chunk_sizes:
         strategies.append(
             (f'backward_{chunk_size}', BackwardLearning, (room_names, chunk_size))
+        )
+    
+    for k in window_sizes:
+        strategies.append(
+            (f'windowed_{k}', WindowedPractice, (room_names, k))
         )
     
     strategies.append(
@@ -89,6 +98,7 @@ def run_benchmark(
     
     # Generate plots
     _create_plots(results, actual_time, actual_attempts, room_names, plots_dir)
+    _create_windowed_sweep_plot(results, window_sizes, plots_dir)
     
     # Save results
     results_file = os.path.join(data_dir, 'benchmark_results.json')
@@ -118,6 +128,68 @@ def run_benchmark(
     print("=" * 60)
     
     return results
+
+
+def _create_windowed_sweep_plot(
+    results: Dict,
+    window_sizes: List[int],
+    plots_dir: str
+):
+    """Create a plot showing mean completion time as a function of K for windowed practice."""
+    ks = []
+    means = []
+    stds = []
+
+    for k in window_sizes:
+        key = f'windowed_{k}'
+        if key not in results:
+            continue
+        ks.append(k)
+        means.append(results[key]['mean_time'] / 3600)
+        stds.append(results[key]['std_time'] / 3600)
+
+    if not ks:
+        return
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    means = np.array(means)
+    stds = np.array(stds)
+    ks = np.array(ks)
+
+    ax.plot(ks, means, 'o-', color='steelblue', linewidth=2, markersize=8, label='Mean time')
+    ax.fill_between(ks, means - stds, means + stds, alpha=0.2, color='steelblue', label='± 1 std')
+
+    # Mark the optimal K
+    best_idx = np.argmin(means)
+    ax.axvline(ks[best_idx], color='green', linestyle='--', alpha=0.7,
+               label=f'Best K={ks[best_idx]} ({means[best_idx]:.1f}h)')
+    ax.plot(ks[best_idx], means[best_idx], '*', color='green', markersize=15, zorder=5)
+
+    # Reference lines for other strategies if available
+    ref_strategies = [
+        ('semiomniscient', 'Semiomniscient', 'red'),
+        ('naive', 'Naive Grind', 'gray'),
+    ]
+    for key, label, color in ref_strategies:
+        if key in results:
+            ref_hours = results[key]['mean_time'] / 3600
+            ax.axhline(ref_hours, color=color, linestyle=':', linewidth=1.5, alpha=0.7,
+                       label=f'{label} ({ref_hours:.1f}h)')
+
+    ax.set_xlabel('K (consecutive successes required)', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Mean Time to Completion (hours)', fontsize=12, fontweight='bold')
+    ax.set_title('Windowed Practice: Effect of K on Completion Time',
+                 fontsize=14, fontweight='bold')
+    ax.set_xticks(ks)
+    ax.legend(loc='best')
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, 'windowed_k_sweep.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"Saved windowed K sweep plot to {plots_dir}/windowed_k_sweep.png")
 
 
 def _create_plots(

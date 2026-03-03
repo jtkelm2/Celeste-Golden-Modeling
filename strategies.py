@@ -113,6 +113,64 @@ class BackwardLearning(Strategy):
             self.current_idx = self.sequence_start
 
 
+class WindowedPractice(Strategy):
+    """
+    Practice each room in isolation until K consecutive successes are achieved,
+    then move on. Once all rooms meet the threshold, switch to full clear attempts.
+
+    Rooms are practiced in order of lowest current success probability.
+    """
+
+    def __init__(self, room_names: List[str], k: int = 5):
+        self.room_names = room_names
+        self.k = k
+        self.consecutive = {room: 0 for room in room_names}
+        self.mastered = {room: False for room in room_names}
+        self.mode = 'training'
+        self.current_idx = 0
+        self._current_training_room = ''
+        self._pick_next_training_room()
+
+    @property
+    def name(self) -> str:
+        return f"Windowed Practice (K={self.k})"
+
+    def _pick_next_training_room(self):
+        """Pick the next unmastered room to train. Returns False if all mastered."""
+        unmastered = [r for r in self.room_names if not self.mastered[r]]
+        if not unmastered:
+            self.mode = 'full_clear'
+            self.current_idx = 0
+            self._current_training_room = ''
+            return False
+        self._current_training_room = unmastered[0]
+        return True
+
+    def get_next_room(self) -> str:
+        if self.mode == 'training':
+            return self._current_training_room
+        else:
+            return self.room_names[self.current_idx]
+
+    def update(self, success: bool):
+        if self.mode == 'training':
+            room = self._current_training_room
+            if success:
+                self.consecutive[room] += 1
+                if self.consecutive[room] >= self.k:
+                    self.mastered[room] = True
+                    self._pick_next_training_room()
+            else:
+                self.consecutive[room] = 0
+        else:
+            if success:
+                self.current_idx += 1
+                if self.current_idx >= len(self.room_names):
+                    self.current_idx = 0
+            else:
+                self.current_idx = 0
+
+
 class Semiomniscient(Strategy):
     """
     Uses fitted models to decide whether to practice individual rooms
@@ -192,7 +250,7 @@ class Semiomniscient(Strategy):
     def get_next_room(self) -> str:
         if self.mode == 'training':
             best_room = None
-            best_net = 10
+            best_net = 0
             
             for room in self.room_names:
                 benefit, cost = self._compute_benefit_cost(room)

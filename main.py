@@ -47,8 +47,15 @@ def main():
         '--chunks',
         type=int,
         nargs='+',
-        default=[7],
-        help='Chunk sizes for backward learning variants (default: 7)'
+        default=None,
+        help='Chunk sizes for backward learning variants (default: room count // 5)'
+    )
+    parser.add_argument(
+        '--windows',
+        type=int,
+        nargs='+',
+        default=[3, 5, 7, 10, 15, 20],
+        help='K values for windowed practice sweep (default: 3 5 7 10 15 20)'
     )
     
     args = parser.parse_args()
@@ -100,7 +107,8 @@ def main():
             benchmark_plots_dir,
             data_dir,
             n_simulations=args.simulations,
-            chunk_sizes=args.chunks
+            chunk_sizes=args.chunks,
+            window_sizes=args.windows
         )
 
 
