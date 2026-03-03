@@ -286,3 +286,269 @@ class Semiomniscient(Strategy):
                 self.current_idx = 0
         
         self._update_cache()
+
+
+class SemiomniscientOnline(Strategy):
+    """
+    Simulates a human player using the Golden Compass mod in real time.
+
+    Unlike the omniscient variant, this strategy does not know the true learning
+    curves. Instead it maintains its own attempt history and fits logistic models
+    online, mirroring the mod's ModelFitter logic:
+
+      - Below min_attempts_for_fit, uses a constant-probability model and marks
+        the room as InsufficientData (priority practice target).
+      - Above that threshold, fits a logistic via MLE. If the fitted learning
+        rate is negative AND the success rate is below neg_beta_threshold, the
+        room is marked NegativeLearningRate (second-priority practice target).
+      - Otherwise the room is Confident and enters normal cost/benefit ranking.
+
+    Recommendation priority (matching the mod's Advisor):
+      1. InsufficientData rooms (lowest success rate first)
+      2. NegativeLearningRate rooms (lowest success rate first)
+      3. Room with best marginal net benefit from one practice attempt
+      4. If no room has positive net benefit, attempt a full clear
+
+    Unlike the offline Semiomniscient, this strategy re-evaluates after every
+    attempt outcome — including during a full clear sequence. A failed full-clear
+    attempt adds data that may cause the advisor to recommend more practice,
+    pulling the player back out of full-clear mode. This matches the mod's
+    behavior where recommendations update live.
+
+    Parameters:
+        room_names:            Ordered list of room names.
+        models:                RoomModels (used only for room times — the strategy
+                               does NOT peek at the true beta parameters).
+        min_attempts_for_fit:  Minimum attempts before fitting a logistic model.
+                               (default 15).
+        neg_beta_threshold:    Success rate below which a negative-beta room is
+                               flagged NegativeLearningRate rather than Confident.
+                               (default 0.80).
+    """
+
+    INSUFFICIENT_DATA = 0
+    NEGATIVE_LEARNING_RATE = 1
+    CONFIDENT = 2
+
+    def __init__(
+        self,
+        room_names: List[str],
+        models: RoomModels,
+        min_attempts_for_fit: int = 15,
+        neg_beta_threshold: float = 0.50,
+    ):
+        self.room_names = room_names
+        self.min_attempts_for_fit = min_attempts_for_fit
+        self.neg_beta_threshold = neg_beta_threshold
+
+        # Online state: history of outcomes per room
+        self.history = {room: [] for room in room_names}
+        # Fitted parameters per room
+        self.fitted = {room: (0.0, 0.0, self.INSUFFICIENT_DATA) for room in room_names}
+        # Room times (known upfront, same as omniscient)
+        self.times = {room: models.rooms[room].time for room in room_names}
+
+        self.mode = 'training'
+        self.current_idx = 0
+        self._last_room = ''
+
+        self._refit_all()
+
+    @property
+    def name(self) -> str:
+        return f"Semiomniscient (online, b={self.neg_beta_threshold}, n≥{self.min_attempts_for_fit})"
+
+    # ── Model fitting (mirrors ModelFitter.Fit) ──────────────────────
+
+    def _fit_room(self, room: str):
+        """Fit a logistic model to the room's observed history."""
+        attempts = self.history[room]
+        n = len(attempts)
+
+        if n == 0:
+            self.fitted[room] = (0.0, 0.0, self.INSUFFICIENT_DATA)
+            return
+
+        sr = sum(attempts) / n
+        sr = max(0.01, min(0.99, sr))
+
+        if n < self.min_attempts_for_fit:
+            beta0 = _log_odds(sr)
+            self.fitted[room] = (beta0, 0.0, self.INSUFFICIENT_DATA)
+            return
+
+        # Fit logistic via BFGS
+        beta0, beta1 = _fit_logistic_mle(attempts)
+
+        if beta1 < 0:
+            beta0 = _log_odds(sr)
+            beta1 = 0.0
+            confidence = (
+                self.NEGATIVE_LEARNING_RATE if sr < self.neg_beta_threshold
+                else self.CONFIDENT
+            )
+            self.fitted[room] = (beta0, beta1, confidence)
+        else:
+            self.fitted[room] = (beta0, beta1, self.CONFIDENT)
+
+    def _refit_all(self):
+        """Refit every room and recompute cached probabilities."""
+        for room in self.room_names:
+            self._fit_room(room)
+        self._update_cache()
+
+    # ── Probability and E0 computation ───────────────────────────────
+
+    def _online_prob(self, room: str, attempt: float = -1) -> float:
+        """Success probability from the online-fitted model."""
+        b0, b1, _ = self.fitted[room]
+        if attempt < 0:
+            attempt = len(self.history[room])
+        return expit(b0 + b1 * attempt)
+
+    def _update_cache(self):
+        self.current_probs = {
+            room: self._online_prob(room) for room in self.room_names
+        }
+        self.current_E0 = self._compute_E0(self.current_probs)
+
+    def _compute_E0(self, probs: dict) -> float:
+        P = 1.0
+        for room in self.room_names:
+            P *= probs[room]
+        if P < 1e-15:
+            return float('inf')
+
+        total = 0.0
+        prod_prev = 1.0
+        for room in self.room_names:
+            p = probs[room]
+            t = self.times[room]
+            a = t * (1 + p) / 2
+            total += a * prod_prev
+            prod_prev *= p
+        return total / P
+
+    # ── Advisor logic (mirrors SemiomniscientAdvisor.GetRecommendation) ──
+
+    def _find_priority_room(self, level: int) -> str | None:
+        """Find the room with the given confidence level and lowest probability."""
+        best = None
+        best_prob = float('inf')
+        for room in self.room_names:
+            _, _, conf = self.fitted[room]
+            if conf != level:
+                continue
+            p = self.current_probs[room]
+            if p < best_prob:
+                best_prob = p
+                best = room
+        return best
+
+    def _best_net_benefit_room(self) -> tuple:
+        """Find the room with the highest positive net benefit. Returns (room, net) or (None, 0)."""
+        best_room = None
+        best_net = 0.0
+
+        for room in self.room_names:
+            b0, b1, _ = self.fitted[room]
+            n = len(self.history[room])
+            p_new = expit(b0 + b1 * (n + 1))
+
+            new_probs = self.current_probs.copy()
+            new_probs[room] = p_new
+            new_E0 = self._compute_E0(new_probs)
+
+            benefit = self.current_E0 - new_E0
+            cost = self.times[room] * (1 + self.current_probs[room]) / 2
+            net = benefit - cost
+
+            if net > best_net:
+                best_net = net
+                best_room = room
+
+        return best_room, best_net
+
+    def get_next_room(self) -> str:
+        if self.mode == 'full_clear' and self.current_idx > 0:
+            room = self.room_names[self.current_idx]
+            self._last_room = room
+            return room
+
+        # Priority 1: InsufficientData
+        priority = self._find_priority_room(self.INSUFFICIENT_DATA)
+        if priority is None:
+            # Priority 2: NegativeLearningRate
+            priority = self._find_priority_room(self.NEGATIVE_LEARNING_RATE)
+
+        if priority is not None:
+            self.mode = 'training'
+            self._last_room = priority
+            return priority
+
+        # Priority 3: cost/benefit optimization
+        best_room, _ = self._best_net_benefit_room()
+        if best_room is not None:
+            self.mode = 'training'
+            self._last_room = best_room
+            return best_room
+
+        # Priority 4: go for gold
+        if self.mode != 'full_clear':
+            self.mode = 'full_clear'
+            self.current_idx = 0
+
+        room = self.room_names[self.current_idx]
+        self._last_room = room
+        return room
+
+    def update(self, success: bool):
+        room = self._last_room
+        self.history[room].append(success)
+
+        if self.mode == 'full_clear':
+            if success:
+                self.current_idx += 1
+            else:
+                self.current_idx = 0
+
+        # Refit only the affected room, then update cache
+        self._fit_room(room)
+        self._update_cache()
+
+
+# ── Utility functions for online fitting ─────────────────────────────
+
+def _log_odds(p: float) -> float:
+    """Log-odds (logit) of a probability, clamped to avoid infinities."""
+    import math
+    p = max(1e-10, min(1 - 1e-10, p))
+    return math.log(p / (1 - p))
+
+
+def _fit_logistic_mle(attempts: List[bool]) -> tuple:
+    """
+    Fit logistic regression via MLE, matching the mod's BFGS approach.
+    Returns (beta0, beta1).
+    """
+    import numpy as np
+    from scipy.optimize import minimize as sp_minimize
+
+    n = len(attempts)
+    t = np.arange(n, dtype=float)
+    y = np.array([1.0 if a else 0.0 for a in attempts])
+
+    def neg_ll(params):
+        b0, b1 = params
+        p = expit(b0 + b1 * t)
+        p = np.clip(p, 1e-10, 1 - 1e-10)
+        return -np.sum(y * np.log(p) + (1 - y) * np.log(1 - p))
+
+    def grad(params):
+        b0, b1 = params
+        p = expit(b0 + b1 * t)
+        residual = p - y
+        return np.array([np.sum(residual), np.sum(residual * t)])
+
+    result = sp_minimize(neg_ll, [0.0, 0.0], jac=grad, method='BFGS')
+    return float(result.x[0]), float(result.x[1])

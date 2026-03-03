@@ -9,7 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Dict, List
 from models import RoomModels, format_time
-from strategies import NaiveGrind, CyclicGrind, BackwardLearning, Semiomniscient, WindowedPractice
+from strategies import NaiveGrind, CyclicGrind, BackwardLearning, Semiomniscient, WindowedPractice, SemiomniscientOnline
 from simulator import benchmark
 
 
@@ -73,6 +73,10 @@ def run_benchmark(
     
     strategies.append(
         ('semiomniscient', Semiomniscient, (room_names, models))
+    )
+    
+    strategies.append(
+        ('semiomniscient_online', SemiomniscientOnline, (room_names, models))
     )
     
     # Run benchmarks
@@ -204,25 +208,81 @@ def _create_plots(
     strategy_names = [r['strategy'] for r in results.values()]
     colors = plt.cm.tab10(np.linspace(0, 1, len(results)))
     
-    # 1. Time distribution histogram with mean lines
-    fig, ax = plt.subplots(figsize=(12, 7))
-    
-    for i, (key, result) in enumerate(results.items()):
-        times_hours = np.array(result['all_times']) / 3600
-        ax.hist(times_hours, alpha=0.8, label=result['strategy'],
-                color=colors[i])
-    
-    # Actual result line
+    # 1. Ridgeline plot of time distributions
+    from scipy.stats import gaussian_kde
+
+    # Sort strategies by mean time (fastest at bottom so the eye reads upward)
+    sorted_keys = sorted(results.keys(), key=lambda k: results[k]['mean_time'], reverse=True)
+    n_strategies = len(sorted_keys)
+
+    # Global x range across all strategies
+    all_times_hours = []
+    for key in sorted_keys:
+        all_times_hours.append(np.array(results[key]['all_times']) / 3600)
+    x_min = min(t.min() for t in all_times_hours)
+    x_max = max(t.max() for t in all_times_hours)
+    x_pad = (x_max - x_min) * 0.05
+    xs = np.linspace(x_min - x_pad, x_max + x_pad, 500)
+
     actual_hours = actual_time / 3600
-    ax.axvline(actual_hours, color='black', linestyle='--', linewidth=3,
-               label=f'Actual ({format_time(actual_time)})')
-    
-    ax.set_xlabel('Time to Completion (hours)', fontweight='bold')
-    ax.set_ylabel('Count', fontweight='bold')
-    ax.set_title('Time Distribution Comparison', fontweight='bold', fontsize=14)
-    ax.legend(loc='upper right')
-    ax.grid(True, alpha=0.3)
-    
+
+    # Compute KDEs and find global max density for uniform scaling
+    kdes = []
+    for times_h in all_times_hours:
+        if len(set(times_h)) > 1:
+            kde = gaussian_kde(times_h, bw_method='scott')
+            kdes.append(kde(xs))
+        else:
+            # Degenerate case: all same value
+            kdes.append(np.zeros_like(xs))
+    max_density = max(k.max() for k in kdes) if kdes else 1.0
+
+    # Vertical spacing between ridges
+    overlap = 0.6
+    ridge_height = 1.0
+
+    fig_height = max(6, 1.2 + n_strategies * ridge_height * (1 - overlap * 0.5))
+    fig, ax = plt.subplots(figsize=(12, fig_height))
+
+    cmap = plt.cm.viridis
+    colors_ridge = cmap(np.linspace(0.15, 0.85, n_strategies))
+
+    for i, key in enumerate(sorted_keys):
+        times_h = all_times_hours[i]
+        density = kdes[i]
+
+        # Normalize so tallest peak across all strategies is a fixed height
+        scaled = density / max_density * ridge_height if max_density > 0 else density
+        baseline = i * ridge_height * (1 - overlap)
+
+        color = colors_ridge[i]
+        ax.fill_between(xs, baseline, baseline + scaled, alpha=0.7,
+                        color=color, edgecolor='white', linewidth=0.8)
+        ax.plot(xs, baseline + scaled, color=color, linewidth=1.2)
+
+        # Strategy label on the left
+        label = results[key]['strategy']
+        mean_h = np.mean(times_h)
+        ax.text(x_min - x_pad - (x_max - x_min) * 0.01, baseline + ridge_height * 0.15,
+                f'{label}  ({mean_h:.1f}h)',
+                ha='right', va='bottom', fontsize=9, fontweight='bold',
+                color=color)
+
+    # Actual result line spanning all ridges
+    y_top = n_strategies * ridge_height * (1 - overlap) + ridge_height
+    ax.plot([actual_hours, actual_hours], [0, y_top],
+            color='black', linestyle='--', linewidth=2, zorder=10)
+    ax.text(actual_hours, y_top * 1.01, f'Actual ({format_time(actual_time)})',
+            ha='center', va='bottom', fontsize=10, fontweight='bold')
+
+    ax.set_xlabel('Time to Completion (hours)', fontsize=12, fontweight='bold')
+    ax.set_title('Time Distribution Comparison', fontsize=14, fontweight='bold', pad=15)
+    ax.set_yticks([])
+    ax.set_xlim(x_min - x_pad - (x_max - x_min) * 0.35, x_max + x_pad)
+    ax.spines['left'].set_visible(False)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
     plt.tight_layout()
     plt.savefig(os.path.join(plots_dir, 'time_distribution.png'), dpi=300, bbox_inches='tight')
     plt.close()
