@@ -3,6 +3,16 @@
 Benchmark strategies and generate comparison plots.
 """
 
+try:
+    import tomllib
+except ModuleNotFoundError:
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]  # pip install tomli for Python < 3.11
+    except ModuleNotFoundError:
+        raise ModuleNotFoundError(
+            "Python 3.11+ is required, or install the tomli package: pip install tomli"
+        )
+
 import json
 import os
 import numpy as np
@@ -13,97 +23,157 @@ from strategies import NaiveGrind, CyclicGrind, BackwardLearning, Semiomniscient
 from simulator import benchmark
 
 
+_STRATEGY_TYPES = {
+    'naive_grind',
+    'cyclic_grind',
+    'backward_learning',
+    'windowed_practice',
+    'semiomniscient',
+    'semiomniscient_online',
+}
+
+
+def _load_config(config_path: str) -> List[Dict]:
+    """Load and validate benchmark_config.toml. Returns the list of strategy entries."""
+    with open(config_path, 'rb') as f:
+        config = tomllib.load(f)
+
+    entries = config.get('strategies', [])
+    if not entries:
+        raise ValueError(f"No [[strategies]] entries found in {config_path}")
+
+    for i, entry in enumerate(entries):
+        if 'type' not in entry:
+            raise ValueError(f"Strategy entry {i} missing required field 'type'")
+        if entry['type'] not in _STRATEGY_TYPES:
+            raise ValueError(
+                f"Unknown strategy type '{entry['type']}' in entry {i}. "
+                f"Valid types: {sorted(_STRATEGY_TYPES)}"
+            )
+        if 'simulations' not in entry:
+            raise ValueError(f"Strategy entry {i} ({entry['type']}) missing required field 'simulations'")
+        if not isinstance(entry['simulations'], int) or entry['simulations'] < 1:
+            raise ValueError(f"Strategy entry {i}: 'simulations' must be a positive integer")
+
+    return entries
+
+
+def _make_key(entry: Dict, seen_keys: Dict[str, int]) -> str:
+    """Generate a unique result-dict key for a strategy config entry."""
+    t = entry['type']
+    if t == 'naive_grind':
+        base = 'naive'
+    elif t == 'cyclic_grind':
+        base = 'cyclic'
+    elif t == 'backward_learning':
+        chunk = entry.get('chunk_size', 1)
+        base = 'backward' if chunk == 1 else f'backward_{chunk}'
+    elif t == 'windowed_practice':
+        base = f"windowed_{entry.get('k', 5)}"
+    elif t == 'semiomniscient':
+        base = 'semiomniscient'
+    elif t == 'semiomniscient_online':
+        base = 'semiomniscient_online'
+    else:
+        base = t
+
+    count = seen_keys.get(base, 0) + 1
+    seen_keys[base] = count
+    return base if count == 1 else f'{base}_{count}'
+
+
+def _build_strategy_list(entries: List[Dict], room_names: List[str], models: RoomModels):
+    """
+    Convert config entries into a list of (key, strategy_class, args, n_sims) tuples.
+    """
+    strategies = []
+    seen_keys: Dict[str, int] = {}
+
+    for entry in entries:
+        t = entry['type']
+        n_sims = entry['simulations']
+        key = _make_key(entry, seen_keys)
+
+        if t == 'naive_grind':
+            strategies.append((key, NaiveGrind, (room_names,), n_sims))
+        elif t == 'cyclic_grind':
+            strategies.append((key, CyclicGrind, (room_names,), n_sims))
+        elif t == 'backward_learning':
+            chunk = entry.get('chunk_size', 1)
+            strategies.append((key, BackwardLearning, (room_names, chunk), n_sims))
+        elif t == 'windowed_practice':
+            k = entry.get('k', 5)
+            strategies.append((key, WindowedPractice, (room_names, k), n_sims))
+        elif t == 'semiomniscient':
+            strategies.append((key, Semiomniscient, (room_names, models), n_sims))
+        elif t == 'semiomniscient_online':
+            strategies.append((key, SemiomniscientOnline, (room_names, models), n_sims))
+
+    return strategies
+
+
 def run_benchmark(
     model_params: Dict,
     plots_dir: str,
     data_dir: str,
-    n_simulations: int = 1000,
-    chunk_sizes: List[int] | None = None,
-    window_sizes: List[int] | None = None
+    config_path: str = 'benchmark_config.toml',
 ):
     """
-    Run benchmarks on all strategies and generate plots.
-    
+    Run benchmarks on configured strategies and generate plots.
+
     Args:
         model_params: Dict of room model parameters
-        plots_dir: Output directory for plots
-        data_dir: Output directory for results JSON
-        n_simulations: Number of Monte Carlo simulations
-        chunk_sizes: List of chunk sizes for backward learning variants
-        window_sizes: List of K values for windowed practice sweep
+        plots_dir:    Output directory for plots
+        data_dir:     Output directory for results JSON
+        config_path:  Path to TOML benchmark config (default: benchmark_config.toml)
     """
     os.makedirs(plots_dir, exist_ok=True)
     os.makedirs(data_dir, exist_ok=True)
-    
+
+    entries = _load_config(config_path)
     models = RoomModels(model_params)
     room_names = models.room_names
 
-    if chunk_sizes is None:
-        chunk_sizes = [len(room_names) // 5]
-    if window_sizes is None:
-        window_sizes = [3, 5, 7, 10, 15, 20]
-    
-    # Calculate actual results from data
+    strategy_list = _build_strategy_list(entries, room_names, models)
+
+    # Actual results from data
     actual_time = sum(model_params[r]['total_time'] for r in room_names)
     actual_attempts = {r: model_params[r]['total_attempts'] for r in room_names}
-    
+
+    total_sims = sum(n for _, _, _, n in strategy_list)
     print(f"{'=' * 60}")
-    print(f"RUNNING BENCHMARKS ({n_simulations} simulations each)")
+    print(f"RUNNING BENCHMARKS ({len(strategy_list)} strategies, {total_sims} total simulations)")
     print(f"{'=' * 60}")
     print()
-    
+
     results = {}
-    
-    # Define strategies to test
-    strategies = [
-        ('naive', NaiveGrind, (room_names,)),
-        ('cyclic', CyclicGrind, (room_names,)),
-        ('backward', BackwardLearning, (room_names, 1)),
-    ]
-    
-    for chunk_size in chunk_sizes:
-        strategies.append(
-            (f'backward_{chunk_size}', BackwardLearning, (room_names, chunk_size))
-        )
-    
-    for k in window_sizes:
-        strategies.append(
-            (f'windowed_{k}', WindowedPractice, (room_names, k))
-        )
-    
-    strategies.append(
-        ('semiomniscient', Semiomniscient, (room_names, models))
-    )
-    
-    strategies.append(
-        ('semiomniscient_online', SemiomniscientOnline, (room_names, models))
-    )
-    
-    # Run benchmarks
-    for key, strategy_class, args in strategies:
-        print(f"Testing {strategy_class(*args).name}...")
-        results[key] = benchmark(strategy_class, args, models, n_simulations)
-    
+    for key, strategy_class, args, n_sims in strategy_list:
+        print(f"Testing {strategy_class(*args).name} ({n_sims} simulations)...")
+        results[key] = benchmark(strategy_class, args, models, n_sims)
+
     # Print results
     print()
     print("=" * 60)
     print("RESULTS SUMMARY")
     print("=" * 60)
     print()
-    
+
     for key, result in results.items():
         print(f"{result['strategy']}:")
         print(f"  Mean time: {format_time(result['mean_time'])} ± {format_time(result['std_time'])}")
         print()
-    
+
     print(f"Actual results:")
     print(f"  Time: {format_time(actual_time)}")
     print()
-    
+
+    # Derive window K values from config for the sweep plot
+    window_ks = [e.get('k', 5) for e in entries if e['type'] == 'windowed_practice']
+
     # Generate plots
     _create_plots(results, actual_time, actual_attempts, room_names, plots_dir)
-    _create_windowed_sweep_plot(results, window_sizes, plots_dir)
-    
+    _create_windowed_sweep_plot(results, window_ks, plots_dir)
+
     # Save results
     results_file = os.path.join(data_dir, 'benchmark_results.json')
     save_results = {
@@ -119,10 +189,10 @@ def run_benchmark(
         'total_time': actual_time,
         'attempts_per_room': actual_attempts
     }
-    
+
     with open(results_file, 'w') as f:
         json.dump(save_results, f, indent=2)
-    
+
     # Print winner
     print("=" * 60)
     best = min(results.items(), key=lambda x: x[1]['mean_time'])
@@ -130,13 +200,13 @@ def run_benchmark(
     print(f"   Expected: {format_time(best[1]['mean_time'])}")
     print(f"   Actual:   {format_time(actual_time)}")
     print("=" * 60)
-    
+
     return results
 
 
 def _create_windowed_sweep_plot(
     results: Dict,
-    window_sizes: List[int],
+    window_ks: List[int],
     plots_dir: str
 ):
     """Create a plot showing mean completion time as a function of K for windowed practice."""
@@ -144,7 +214,7 @@ def _create_windowed_sweep_plot(
     means = []
     stds = []
 
-    for k in window_sizes:
+    for k in window_ks:
         key = f'windowed_{k}'
         if key not in results:
             continue
@@ -204,10 +274,9 @@ def _create_plots(
     plots_dir: str
 ):
     """Create all benchmark visualizations."""
-    
+
     strategy_names = [r['strategy'] for r in results.values()]
-    colors = plt.cm.tab10(np.linspace(0, 1, len(results)))
-    
+
     # 1. Ridgeline plot of time distributions
     from scipy.stats import gaussian_kde
 
@@ -233,7 +302,6 @@ def _create_plots(
             kde = gaussian_kde(times_h, bw_method='scott')
             kdes.append(kde(xs))
         else:
-            # Degenerate case: all same value
             kdes.append(np.zeros_like(xs))
     max_density = max(k.max() for k in kdes) if kdes else 1.0
 
@@ -244,14 +312,12 @@ def _create_plots(
     fig_height = max(6, 1.2 + n_strategies * ridge_height * (1 - overlap * 0.5))
     fig, ax = plt.subplots(figsize=(12, fig_height))
 
-    cmap = plt.cm.viridis
-    colors_ridge = cmap(np.linspace(0.15, 0.85, n_strategies))
+    colors_ridge = plt.colormaps['viridis'](np.linspace(0.15, 0.85, n_strategies))
 
     for i, key in enumerate(sorted_keys):
         times_h = all_times_hours[i]
         density = kdes[i]
 
-        # Normalize so tallest peak across all strategies is a fixed height
         scaled = density / max_density * ridge_height if max_density > 0 else density
         baseline = i * ridge_height * (1 - overlap)
 
@@ -260,7 +326,6 @@ def _create_plots(
                         color=color, edgecolor='white', linewidth=0.8)
         ax.plot(xs, baseline + scaled, color=color, linewidth=1.2)
 
-        # Strategy label on the left
         label = results[key]['strategy']
         mean_h = np.mean(times_h)
         ax.text(x_min - x_pad - (x_max - x_min) * 0.01, baseline + ridge_height * 0.15,
@@ -268,7 +333,6 @@ def _create_plots(
                 ha='right', va='bottom', fontsize=9, fontweight='bold',
                 color=color)
 
-    # Actual result line spanning all ridges
     y_top = n_strategies * ridge_height * (1 - overlap) + ridge_height
     ax.plot([actual_hours, actual_hours], [0, y_top],
             color='black', linestyle='--', linewidth=2, zorder=10)
@@ -286,65 +350,62 @@ def _create_plots(
     plt.tight_layout()
     plt.savefig(os.path.join(plots_dir, 'time_distribution.png'), dpi=300, bbox_inches='tight')
     plt.close()
-    
+
     # 2. Mean time bar chart
     fig, ax = plt.subplots(figsize=(10, 6))
-    
+
     mean_times = [r['mean_time'] / 3600 for r in results.values()]
     std_times = [r['std_time'] / 3600 for r in results.values()]
     x = np.arange(len(strategy_names))
-    
-    # Color by performance
+
     sorted_indices = np.argsort(mean_times)
     bar_colors = np.zeros((len(mean_times), 4))
     for rank, idx in enumerate(sorted_indices):
-        bar_colors[idx] = plt.cm.RdYlGn_r(rank / (len(mean_times) - 1) * 0.6 + 0.2)
-    
+        bar_colors[idx] = plt.colormaps['RdYlGn_r'](rank / (len(mean_times) - 1) * 0.6 + 0.2)
+
     bars = ax.bar(x, mean_times, yerr=std_times, alpha=0.8, capsize=5, color=bar_colors)
     ax.axhline(actual_hours, color='black', linestyle='--', linewidth=2, label=f'Actual ({format_time(actual_time)})')
-    
-    # Add numeric labels on bars
+
     for i, (bar, mean, std) in enumerate(zip(bars, mean_times, std_times)):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std_times[i] * 1.04,
                 f'{mean:.1f} ± {std:.1f}h', ha='center', va='bottom', fontsize=9, fontweight='bold')
-    
+
     ax.set_xticks(x)
     ax.set_xticklabels(strategy_names, rotation=45, ha='right')
     ax.set_ylabel('Time (hours)', fontweight='bold')
     ax.set_title('Mean Time to Completion', fontweight='bold', fontsize=14)
     ax.legend()
     ax.grid(True, alpha=0.3, axis='y')
-    
+
     plt.tight_layout()
     plt.savefig(os.path.join(plots_dir, 'mean_time_comparison.png'), dpi=300, bbox_inches='tight')
     plt.close()
-    
+
     # 3. Per-room attempt counts
     for room in room_names:
         fig, ax = plt.subplots(figsize=(10, 6))
-        
+
         means = [results[k]['room_attempts'][room]['mean'] for k in results.keys()]
         stds = [results[k]['room_attempts'][room]['std'] for k in results.keys()]
         x = np.arange(len(strategy_names))
-        
+
         bars = ax.bar(x, means, yerr=stds, alpha=0.7, capsize=5, color='steelblue')
         ax.axhline(actual_attempts[room], color='black', linestyle='--', linewidth=2,
                    label=f'Actual ({actual_attempts[room]})')
-        
-        # Add numeric labels on bars
+
         for i, (bar, mean, std) in enumerate(zip(bars, means, stds)):
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std + 1,
                     f'{mean:.0f} ± {std:.0f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
-        
+
         ax.set_xticks(x)
         ax.set_xticklabels(strategy_names, rotation=45, ha='right')
         ax.set_ylabel('Attempts', fontweight='bold')
         ax.set_title(f'Room {room}: Attempts per Strategy', fontweight='bold', fontsize=14)
         ax.legend()
         ax.grid(True, alpha=0.3, axis='y')
-        
+
         plt.tight_layout()
         plt.savefig(os.path.join(plots_dir, f'room_{room}_attempts.png'), dpi=300, bbox_inches='tight')
         plt.close()
-    
+
     print(f"Saved plots to {plots_dir}/")

@@ -3,9 +3,11 @@
 Celeste Golden Run Analysis and Strategy Benchmarking
 
 Usage:
-    python main.py [--attempts PATH] [--times PATH] [--analyze] [--benchmark] [--simulations N]
+    python main.py [--attempts PATH] [--times PATH] [--analyze] [--benchmark]
+                   [--benchmark-config PATH]
 
 If neither --analyze nor --benchmark is specified, both are run.
+Strategy selection and simulation counts are controlled via benchmark_config.toml.
 """
 
 import argparse
@@ -38,24 +40,10 @@ def main():
         help='Run strategy benchmarks'
     )
     parser.add_argument(
-        '--simulations', '-n',
-        type=int,
-        default=1000,
-        help='Number of Monte Carlo simulations for benchmarking (default: 1000)'
-    )
-    parser.add_argument(
-        '--chunks',
-        type=int,
-        nargs='+',
-        default=None,
-        help='Chunk sizes for backward learning variants (default: room count // 5)'
-    )
-    parser.add_argument(
-        '--windows',
-        type=int,
-        nargs='+',
-        default=[3, 5, 7, 10, 15, 20],
-        help='K values for windowed practice sweep (default: 3 5 7 10 15 20)'
+        '--benchmark-config',
+        default='benchmark_config.toml',
+        metavar='PATH',
+        help='Path to benchmark TOML config (default: benchmark_config.toml)'
     )
     
     args = parser.parse_args()
@@ -106,9 +94,7 @@ def main():
             model_params,
             benchmark_plots_dir,
             data_dir,
-            n_simulations=args.simulations,
-            chunk_sizes=args.chunks,
-            window_sizes=args.windows
+            config_path=args.benchmark_config,
         )
 
 
