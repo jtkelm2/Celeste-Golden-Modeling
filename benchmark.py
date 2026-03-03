@@ -107,7 +107,9 @@ def _build_strategy_list(entries: List[Dict], room_names: List[str], models: Roo
         elif t == 'semiomniscient':
             strategies.append((key, Semiomniscient, (room_names, models), n_sims))
         elif t == 'semiomniscient_online':
-            strategies.append((key, SemiomniscientOnline, (room_names, models), n_sims))
+            neg_beta_threshold = entry.get('neg_beta_threshold', 0.5)
+            min_attempts_for_fit = entry.get('min_attempts_for_fit', 15)
+            strategies.append((key, SemiomniscientOnline, (room_names, models, min_attempts_for_fit, neg_beta_threshold), n_sims))
 
     return strategies
 

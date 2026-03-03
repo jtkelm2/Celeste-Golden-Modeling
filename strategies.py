@@ -323,7 +323,7 @@ class SemiomniscientOnline(Strategy):
                                (default 15).
         neg_beta_threshold:    Success rate below which a negative-beta room is
                                flagged NegativeLearningRate rather than Confident.
-                               (default 0.80).
+                               (default 0.50).
     """
 
     INSUFFICIENT_DATA = 0
