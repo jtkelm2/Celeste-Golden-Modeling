@@ -1,0 +1,61 @@
+# Benchmark configuration
+# Each [[strategies]] entry specifies one strategy variant to benchmark.
+# Required fields: type, simulations
+# Per-type optional fields are noted below.
+
+[[strategies]]
+type = "naive_grind"
+simulations = 1000
+
+[[strategies]]
+type = "cyclic_grind"
+simulations = 1000
+
+# backward_learning: optional chunk_size (default 1)
+[[strategies]]
+type = "backward_learning"
+simulations = 1000
+
+[[strategies]]
+type = "backward_learning"
+simulations = 1000
+chunk_size = 5
+
+# windowed_practice: optional k (default 5)
+[[strategies]]
+type = "windowed_practice"
+simulations = 500
+k = 3
+
+[[strategies]]
+type = "windowed_practice"
+simulations = 500
+k = 5
+
+[[strategies]]
+type = "windowed_practice"
+simulations = 500
+k = 7
+
+[[strategies]]
+type = "windowed_practice"
+simulations = 500
+k = 10
+
+[[strategies]]
+type = "windowed_practice"
+simulations = 500
+k = 15
+
+[[strategies]]
+type = "windowed_practice"
+simulations = 500
+k = 20
+
+[[strategies]]
+type = "semiomniscient"
+simulations = 30
+
+[[strategies]]
+type = "semiomniscient_online"
+simulations = 30

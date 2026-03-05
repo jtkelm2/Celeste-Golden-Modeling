@@ -380,7 +380,7 @@ class SemiomniscientOnline(Strategy):
         # Fit logistic via BFGS
         beta0, beta1 = _fit_logistic_mle(attempts)
 
-        if beta1 < 0:
+        if beta1 < 0.00001:
             beta0 = _log_odds(sr)
             beta1 = 0.0
             confidence = (
