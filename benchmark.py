@@ -73,8 +73,7 @@ def _make_key(entry: Dict, seen_keys: Dict[str, int]) -> str:
     elif t == 'semiomniscient':
         base = 'semiomniscient'
     elif t == 'semiomniscient_online':
-        selector = entry.get('training_selector', 'max_benefit')
-        base = 'semiomniscient_online' if selector == 'max_benefit' else 'semiomniscient_online_deltap'
+        base = 'semiomniscient_online'
     else:
         base = t
 
