@@ -946,9 +946,10 @@ def _build_strategy(strategy_type: str, params: Dict, room_names: List[str], mod
     elif t == 'semiomniscient':
         return Semiomniscient, (room_names, models)
     elif t == 'semiomniscient_online':
-        min_fit = int(params.get('min_attempts_for_fit', 15))
         neg_thresh = float(params.get('neg_beta_threshold', 0.5))
-        return SemiomniscientOnline, (room_names, models, min_fit, neg_thresh)
+        window = int(params.get('stability_window', 5))
+        eps = float(params.get('stability_eps', 0.1))
+        return SemiomniscientOnline, (room_names, models, neg_thresh, window, eps)
     else:
         raise ValueError(f"Unknown strategy type: {t!r}")
 

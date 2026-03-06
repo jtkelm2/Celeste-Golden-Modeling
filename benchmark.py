@@ -73,7 +73,8 @@ def _make_key(entry: Dict, seen_keys: Dict[str, int]) -> str:
     elif t == 'semiomniscient':
         base = 'semiomniscient'
     elif t == 'semiomniscient_online':
-        base = 'semiomniscient_online'
+        selector = entry.get('training_selector', 'max_benefit')
+        base = 'semiomniscient_online' if selector == 'max_benefit' else 'semiomniscient_online_deltap'
     else:
         base = t
 
@@ -108,8 +109,9 @@ def _build_strategy_list(entries: List[Dict], room_names: List[str], models: Roo
             strategies.append((key, Semiomniscient, (room_names, models), n_sims))
         elif t == 'semiomniscient_online':
             neg_beta_threshold = entry.get('neg_beta_threshold', 0.5)
-            min_attempts_for_fit = entry.get('min_attempts_for_fit', 15)
-            strategies.append((key, SemiomniscientOnline, (room_names, models, min_attempts_for_fit, neg_beta_threshold), n_sims))
+            stability_window = entry.get('stability_window', 5)
+            stability_eps = entry.get('stability_eps', 0.1)
+            strategies.append((key, SemiomniscientOnline, (room_names, models, neg_beta_threshold, stability_window, stability_eps), n_sims))
 
     return strategies
 

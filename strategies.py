@@ -5,6 +5,7 @@ Practice strategies for Celeste golden runs.
 
 from abc import ABC, abstractmethod
 from typing import List
+import numpy as np
 from scipy.special import expit
 from models import RoomModels
 
@@ -334,16 +335,20 @@ class SemiomniscientOnline(Strategy):
         self,
         room_names: List[str],
         models: RoomModels,
-        min_attempts_for_fit: int = 15,
         neg_beta_threshold: float = 0.50,
+        stability_window: int = 5,
+        stability_eps: float = 0.0005,
     ):
         self.room_names = room_names
-        self.min_attempts_for_fit = min_attempts_for_fit
         self.neg_beta_threshold = neg_beta_threshold
+        self.stability_window = stability_window
+        self.stability_eps = stability_eps
 
         # Online state: history of outcomes per room
         self.history = {room: [] for room in room_names}
-        # Fitted parameters per room
+        # Rolling history of raw MLE-fitted β₁ per room, used for stability gating
+        self.beta1_history = {room: [] for room in room_names}
+        # Fitted parameters per room: (β₀, β₁, confidence_class)
         self.fitted = {room: (0.0, 0.0, self.INSUFFICIENT_DATA) for room in room_names}
         # Room times (known upfront, same as omniscient)
         self.times = {room: models.rooms[room].time for room in room_names}
@@ -356,7 +361,8 @@ class SemiomniscientOnline(Strategy):
 
     @property
     def name(self) -> str:
-        return f"Semiomniscient (online, b={self.neg_beta_threshold}, n≥{self.min_attempts_for_fit})"
+        return (f"Semiomniscient (online, b={self.neg_beta_threshold}, "
+                f"w={self.stability_window}, ε={self.stability_eps})")
 
     # ── Model fitting (mirrors ModelFitter.Fit) ──────────────────────
 
@@ -371,25 +377,32 @@ class SemiomniscientOnline(Strategy):
 
         sr = sum(attempts) / n
         sr = max(0.01, min(0.99, sr))
+        beta0_constant = _log_odds(sr)
 
-        if n < self.min_attempts_for_fit:
-            beta0 = _log_odds(sr)
-            self.fitted[room] = (beta0, 0.0, self.INSUFFICIENT_DATA)
+        if n < 3:
+            # Too few points for a meaningful logistic fit
+            self.fitted[room] = (beta0_constant, 0.0, self.INSUFFICIENT_DATA)
             return
 
-        # Fit logistic via BFGS
-        beta0, beta1 = _fit_logistic_mle(attempts)
+        # Fit logistic via BFGS; track raw β₁ for stability gating
+        beta0_fit, beta1_fit = _fit_logistic_mle(attempts)
+        self.beta1_history[room].append(beta1_fit)
 
-        if beta1 < 0.00001:
-            beta0 = _log_odds(sr)
-            beta1 = 0.0
+        recent = self.beta1_history[room][-self.stability_window:]
+        if len(recent) < self.stability_window or np.std(recent) > self.stability_eps:
+            # β₁ not yet stable: hold in INSUFFICIENT_DATA with constant model
+            self.fitted[room] = (beta0_constant, 0.0, self.INSUFFICIENT_DATA)
+            return
+
+        # Stable enough — classify normally
+        if beta1_fit < 0.00001:
             confidence = (
                 self.NEGATIVE_LEARNING_RATE if sr < self.neg_beta_threshold
                 else self.CONFIDENT
             )
-            self.fitted[room] = (beta0, beta1, confidence)
+            self.fitted[room] = (beta0_constant, 0.0, confidence)
         else:
-            self.fitted[room] = (beta0, beta1, self.CONFIDENT)
+            self.fitted[room] = (beta0_fit, beta1_fit, self.CONFIDENT)
 
     def _refit_all(self):
         """Refit every room and recompute cached probabilities."""
@@ -486,7 +499,6 @@ class SemiomniscientOnline(Strategy):
             self._last_room = priority
             return priority
 
-        # Priority 3: cost/benefit optimization
         best_room, _ = self._best_net_benefit_room()
         if best_room is not None:
             self.mode = 'training'
