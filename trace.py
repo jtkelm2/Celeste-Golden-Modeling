@@ -31,7 +31,7 @@ import matplotlib.gridspec as gridspec
 from matplotlib.lines import Line2D
 from scipy.special import expit
 
-from models import RoomModels
+from models import RoomModels, expected_attempt_time
 from strategies import (
     NaiveGrind, CyclicGrind, BackwardLearning,
     WindowedPractice, Semiomniscient, SemiomniscientOnline,
@@ -52,6 +52,7 @@ class Step:
     reason: str                 # 'insufficient_data' | 'negative_lr' | 'cost_benefit'
                                 # | 'full_clear_mid' | 'full_clear_start'
     run_id: int                 # increments each time a new full_clear run begins
+    attempt_n: int              # 0-indexed attempt count for this room at this step
     strategy_prob: float        # strategy's probability estimate for this room
     true_prob: float            # true model probability at this attempt number
     # Full snapshot of all room probabilities at the moment of decision
@@ -128,7 +129,7 @@ def _net_benefits_snapshot(strategy) -> Dict[str, float]:
         new_probs = strategy.current_probs.copy()
         new_probs[room] = p_new
         benefit = E0 - strategy._compute_E0(new_probs)
-        cost = strategy.times[room] * (1 + strategy.current_probs[room]) / 2
+        cost = expected_attempt_time(strategy.times[room], strategy.current_probs[room])
         result[room] = benefit - cost
     return result
 
@@ -151,7 +152,7 @@ def _compute_true_E0(models: RoomModels, attempt_counts: Dict[str, int]) -> floa
     for room in models.room_names:
         p = probs[room]
         t = models.rooms[room].time
-        total += t * (1 + p) / 2 * prod_prev
+        total += models.expected_attempt_time(room, p) * prod_prev
         prod_prev *= p
     return total / P
 
@@ -220,6 +221,7 @@ def run_trace(
             mode=mode,
             reason=reason,
             run_id=run_id,
+            attempt_n=n,
             strategy_prob=all_probs.get(room, float('nan')),
             true_prob=true_prob,
             all_probs=all_probs,
@@ -1029,7 +1031,7 @@ def main():
 
     from models import format_time
     total_time = sum(
-        models.attempt_time(s.room, s.success) for s in steps
+        models.attempt_time(s.room, s.true_prob, s.success) for s in steps
     )
     print(f"Total simulated time: {format_time(total_time)}")
     print()

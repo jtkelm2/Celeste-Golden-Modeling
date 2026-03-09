@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from typing import List
 import numpy as np
 from scipy.special import expit
-from models import RoomModels
+from models import RoomModels, expected_attempt_time
 
 
 class Strategy(ABC):
@@ -209,7 +209,7 @@ class Semiomniscient(Strategy):
         """
         Expected time to full clear given probabilities.
         E_0 = (1/P) * sum_j [a_j * prod_{k<j} p_k]
-        where a_j = t_j * (1 + p_j) / 2
+        where a_j is the average for a single room
         """
         P = 1.0
         for room in self.room_names:
@@ -219,13 +219,12 @@ class Semiomniscient(Strategy):
         prod_prev = 1.0
         for room in self.room_names:
             p = probs[room]
-            t = self.models.rooms[room].time
-            a = t * (1 + p) / 2
+            a = self.models.expected_attempt_time(room, p)
             total += a * prod_prev
             prod_prev *= p
-        
+
         return total / P
-    
+
     def _compute_benefit_cost(self, room: str) -> tuple:
         """
         Compute benefit and cost of one more practice attempt on room.
@@ -244,8 +243,8 @@ class Semiomniscient(Strategy):
         new_E0 = self._compute_E0(new_probs)
         
         benefit = self.current_E0 - new_E0
-        cost = m.time * (1 + self.current_probs[room]) / 2
-        
+        cost = self.models.expected_attempt_time(room, self.current_probs[room])
+
         return benefit, cost
     
     def get_next_room(self) -> str:
@@ -435,9 +434,9 @@ class SemiomniscientOnline(Strategy):
         total = 0.0
         prod_prev = 1.0
         for room in self.room_names:
-            p = probs[room]
             t = self.times[room]
-            a = t * (1 + p) / 2
+            p = probs[room]
+            a = expected_attempt_time(t, p)
             total += a * prod_prev
             prod_prev *= p
         return total / P
@@ -473,7 +472,7 @@ class SemiomniscientOnline(Strategy):
             new_E0 = self._compute_E0(new_probs)
 
             benefit = self.current_E0 - new_E0
-            cost = self.times[room] * (1 + self.current_probs[room]) / 2
+            cost = expected_attempt_time(self.times[room], self.current_probs[room])
             net = benefit - cost
 
             if net > best_net:

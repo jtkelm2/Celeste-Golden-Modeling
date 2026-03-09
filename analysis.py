@@ -9,7 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.special import expit
 from typing import Dict, List
-from models import fit_logistic_model
+from models import fit_logistic_model, attempt_time
 
 
 def analyze_room(room_name: str, attempts: List[bool], time: float, plots_dir: str) -> dict:
@@ -51,7 +51,7 @@ def analyze_room(room_name: str, attempts: List[bool], time: float, plots_dir: s
     ax.grid(True, alpha=0.3, linestyle='--')
     ax.legend(loc='best', fontsize=10)
     
-    success_rate = np.mean(y)
+    success_rate = np.mean(y).astype(float)
     title = f'Room {room_name}: Survival Probability Over Time'
     subtitle = (f'β₀={beta_0:.3f}, β₁={beta_1:.6f} | '
                 f'Attempts: {n} | Success rate: {success_rate*100:.1f}%')
@@ -62,7 +62,7 @@ def analyze_room(room_name: str, attempts: List[bool], time: float, plots_dir: s
     plt.close()
     
     # Calculate total time
-    total_time = n * time * (1 + success_rate) / 2
+    total_time = sum(attempt_time(time, float(predicted_prob[i]), a) for i, a in enumerate(attempts))
     
     return {
         'beta_0': beta_0,

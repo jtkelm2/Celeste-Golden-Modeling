@@ -35,7 +35,7 @@ def simulate_once(
         
         prob = models.success_prob(room, n)
         success = np.random.random() < prob
-        total_time += models.attempt_time(room, success)
+        total_time += models.attempt_time(room, prob, success)
         
         strategy.update(success)
         

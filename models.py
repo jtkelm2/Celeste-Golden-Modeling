@@ -41,10 +41,28 @@ class RoomModels:
         m = self.rooms[room]
         return expit(m.beta_0 + m.beta_1 * attempt)
     
-    def attempt_time(self, room: str, success: bool) -> float:
-        """Time for an attempt: full time if success, half if death."""
-        t = self.rooms[room].time
-        return t if success else t / 2
+    def attempt_time(self, room: str, p: float, success: bool) -> float:
+        """Time for an attempt."""
+        return attempt_time(self.rooms[room].time, p, success)
+
+    def expected_attempt_time(self, room: str, p: float) -> float:
+        """Expected time for an attempt given success probability p."""
+        return expected_attempt_time(self.rooms[room].time, p)
+
+
+def attempt_time(t: float, p: float, success: bool) -> float:
+    """Time for an attempt"""
+    # return t if success else t / 2
+    if success: return t
+    elif p > 0.99: return t/2
+    elif p < 0.01: return 0
+    else: return -t * (p/(1-p) + 1/np.log(p))
+    #return t if success else p > 0.99 -t * (p / (1-p))
+
+
+def expected_attempt_time(t: float, p: float) -> float:
+    """Expected time for an attempt given success probability p."""
+    return p * attempt_time(t,p,True) + (1-p) * attempt_time(t,p,False)
 
 
 def fit_logistic_model(attempts: List[bool]) -> dict:
