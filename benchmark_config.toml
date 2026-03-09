@@ -59,3 +59,7 @@ simulations = 30
 [[strategies]]
 type = "semiomniscient_online"
 simulations = 30
+
+[[strategies]]
+type = "poisson"
+simulations = 30

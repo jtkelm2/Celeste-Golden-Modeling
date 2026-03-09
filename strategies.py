@@ -563,3 +563,148 @@ def _fit_logistic_mle(attempts: List[bool]) -> tuple:
 
     result = sp_minimize(neg_ll, [0.0, 0.0], jac=grad, method='BFGS')
     return float(result.x[0]), float(result.x[1])
+
+class Poisson(Strategy):
+    """
+    Models the chapter as a Poisson point process to decide between
+    targeted practice and full-clear attempts.
+
+    Each room i has death rate λ_i = -log(p_i). The chapter's aggregate
+    death rate is Λ = Σλ_i, and the expected time to complete a golden
+    run (assuming no further learning) is
+
+        f(Λ) = T · (e^Λ - 1) / Λ
+
+    where T = Σt_i is the total room time.
+
+    The optimal room to practice maximises β₁_i · λ_i / t_i, and we
+    should practice at all iff the marginal benefit exceeds the cost:
+
+        f'(Λ) > t_best / (β₁_best · λ_best)
+
+    This avoids recomputing E₀ per room entirely: the ranking is O(n)
+    with no inner loops, and the train/clear decision is a single
+    scalar comparison.
+
+    Trade-off vs Semiomniscient: this ignores positional weighting
+    (early rooms gate late rooms), treating all death risk as
+    order-independent.
+    """
+
+    def __init__(self, room_names: List[str], models: RoomModels):
+        self.room_names = room_names
+        self.models = models
+        self.attempt_counts = {room: 0 for room in room_names}
+        self.mode = 'training'
+        self.current_idx = 0
+        self._last_room = None
+
+        self._update_cache()
+
+    @property
+    def name(self) -> str:
+        return "Poisson"
+
+    # ── Cache ────────────────────────────────────────────────────────
+
+    def _update_cache(self):
+        """Recompute per-room probabilities, death rates, and aggregate quantities."""
+        self.current_probs = {
+            room: self.models.success_prob(room, self.attempt_counts[room])
+            for room in self.room_names
+        }
+        eps = 1e-15
+        self._lambdas = {
+            room: -np.log(np.clip(self.current_probs[room], eps, 1 - eps))
+            for room in self.room_names
+        }
+        self._big_lambda = sum(self._lambdas.values())
+        self._big_T = sum(self.models.rooms[room].time for room in self.room_names)
+
+    @staticmethod
+    def _f(T: float, L: float) -> float:
+        """Expected completion time: T(e^Λ - 1)/Λ."""
+        if L < 1e-12:
+            return T  # limΛ→0 f = T
+        return T * (np.exp(L) - 1) / L
+
+    @staticmethod
+    def _df_dL(T: float, L: float) -> float:
+        """df/dΛ = T[(Λ-1)e^Λ + 1] / Λ²."""
+        if L < 1e-12:
+            return T / 2  # limΛ→0 via Taylor: T·(1/2 + Λ/3 + ...)
+        return T * ((L - 1) * np.exp(L) + 1) / (L * L)
+
+    # ── Decision logic ───────────────────────────────────────────────
+
+    def _best_training_room(self):
+        """
+        Find the room with highest priority score β₁·λ/t, and check
+        whether training it beats attempting a full clear.
+
+        Returns (room, net_benefit) or (None, 0) if no room is worth
+        training.
+        """
+        df = self._df_dL(self._big_T, self._big_lambda)
+
+        best_room = None
+        best_score = 0.0
+
+        for room in self.room_names:
+            m = self.models.rooms[room]
+            lam = self._lambdas[room]
+            # β₁ ≤ 0 means no learning; skip
+            if m.beta_1 <= 0:
+                continue
+            score = m.beta_1 * lam / m.time
+            if score > best_score:
+                best_score = score
+                best_room = room
+
+        if best_room is None:
+            return None, 0.0
+
+        m = self.models.rooms[best_room]
+        lam = self._lambdas[best_room]
+        threshold = m.time / (m.beta_1 * lam) if (m.beta_1 * lam) > 1e-15 else float('inf')
+
+        if df > threshold:
+            # Net benefit: first-order approximation
+            p = self.current_probs[best_room]
+            delta = m.beta_1 * (1 - p)
+            benefit = df * delta
+            cost = expected_attempt_time(m.time, p)
+            return best_room, benefit - cost
+        else:
+            return None, 0.0
+
+    def get_next_room(self) -> str:
+        if self.mode == 'training':
+            best_room, _ = self._best_training_room()
+
+            if best_room is not None:
+                self._last_room = best_room
+                return best_room
+            else:
+                self.mode = 'full_clear'
+                self.current_idx = 0
+                self._last_room = self.room_names[0]
+                return self.room_names[0]
+        else:
+            room = self.room_names[self.current_idx]
+            self._last_room = room
+            return room
+
+    def update(self, success: bool):
+        assert self._last_room is not None
+        self.attempt_counts[self._last_room] += 1
+
+        if self.mode == 'full_clear':
+            if success:
+                self.current_idx += 1
+                if self.current_idx >= len(self.room_names):
+                    self.current_idx = 0
+            else:
+                self.current_idx = 0
+
+        self._update_cache()
