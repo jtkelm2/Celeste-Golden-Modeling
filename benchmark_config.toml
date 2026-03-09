@@ -63,3 +63,7 @@ simulations = 30
 [[strategies]]
 type = "poisson"
 simulations = 30
+
+[[strategies]]
+type = "poisson_online"
+simulations = 30

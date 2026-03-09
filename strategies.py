@@ -708,3 +708,281 @@ class Poisson(Strategy):
                 self.current_idx = 0
 
         self._update_cache()
+
+class PoissonOnline(Strategy):
+    """
+    Online variant of the Poisson strategy using principled uncertainty
+    quantification to balance exploration and exploitation.
+
+    Like Poisson, models the chapter as a Poisson point process with
+    aggregate death rate Λ = Σλ_i and expected completion time
+    f(Λ) = T(e^Λ - 1)/Λ.  Unlike the offline variant, this strategy
+    does not know the true learning curves.  It fits regularised
+    logistic models online and uses the Laplace approximation (observed
+    Fisher information) to quantify parametric uncertainty.
+
+    Room selection uses a UCB (upper confidence bound) on the priority
+    score s_i = β₁_i · λ_i / t_i.  Uncertainty on s_i is obtained via
+    the delta method: Var(s) = ∇s^T Σ ∇s, where Σ = I_k⁻¹ is the
+    posterior covariance from the Fisher information plus a Gaussian
+    prior.  The UCB score is then
+
+        s_UCB = ŝ + α · σ_s
+
+    This naturally drives exploration of rooms with few attempts (high
+    σ_s) and converges to the point-estimate ranking as data
+    accumulates.  No ad-hoc stability windows or hard data-count
+    thresholds are needed.
+
+    The train-vs-clear decision checks df/dΛ · s_UCB > 1 for the best
+    room; if no room passes this test, the strategy attempts a full
+    clear.  Like SemiomniscientOnline, it re-evaluates at the start of
+    each full-clear run (but not mid-run).
+
+    Parameters:
+        room_names: Ordered list of room names.
+        models:     RoomModels (used ONLY for room times; true β
+                    parameters are never accessed).
+        alpha:      UCB exploration parameter.  Higher values drive more
+                    exploration.  α = 1.96 corresponds to a 95% one-
+                    sided confidence bound.
+        tau:        Prior standard deviation on (β₀, β₁).  Controls
+                    regularisation strength and initial uncertainty.
+                    Larger τ = weaker prior = more initial exploration.
+    """
+
+    def __init__(
+        self,
+        room_names: List[str],
+        models: RoomModels,
+        alpha: float = 1.96,
+        tau: float = 3.0,
+    ):
+        self.room_names = room_names
+        self.alpha = alpha
+        self.tau = tau
+        self._tau2 = tau * tau
+
+        # Only record room times — no peeking at true β parameters
+        self.times = {room: models.rooms[room].time for room in room_names}
+        self._big_T = sum(self.times.values())
+
+        # Online state
+        self.history: dict[str, list[bool]] = {room: [] for room in room_names}
+        self.fitted: dict[str, tuple[float, float]] = {
+            room: (0.0, 0.0) for room in room_names
+        }
+        # Posterior covariance per room (initialised to prior)
+        self.covariance: dict[str, np.ndarray] = {
+            room: np.eye(2) * self._tau2 for room in room_names
+        }
+
+        self.mode = 'training'
+        self.current_idx = 0
+        self._last_room = ''
+
+        self._update_cache()
+
+    @property
+    def name(self) -> str:
+        return f"Poisson (online, α={self.alpha}, τ={self.tau})"
+
+    # ── Model fitting ────────────────────────────────────────────────
+
+    def _fit_room(self, room: str):
+        """
+        Fit a regularised logistic model (MAP under a N(0, τ²I) prior)
+        and compute the posterior covariance via the Laplace
+        approximation: Σ = (I_observed + τ⁻²I)⁻¹.
+        """
+        attempts = self.history[room]
+        n = len(attempts)
+
+        if n == 0:
+            self.fitted[room] = (0.0, 0.0)
+            self.covariance[room] = np.eye(2) * self._tau2
+            return
+
+        t_arr = np.arange(n, dtype=float)
+        y = np.array([1.0 if a else 0.0 for a in attempts])
+        inv_tau2 = 1.0 / self._tau2
+
+        def objective(params):
+            b0, b1 = params
+            p = expit(b0 + b1 * t_arr)
+            p = np.clip(p, 1e-10, 1 - 1e-10)
+            nll = -np.sum(y * np.log(p) + (1 - y) * np.log(1 - p))
+            return nll + 0.5 * inv_tau2 * (b0 * b0 + b1 * b1)
+
+        def gradient(params):
+            b0, b1 = params
+            p = expit(b0 + b1 * t_arr)
+            r = p - y
+            return np.array([
+                np.sum(r) + inv_tau2 * b0,
+                np.sum(r * t_arr) + inv_tau2 * b1,
+            ])
+
+        from scipy.optimize import minimize as sp_minimize
+        result = sp_minimize(objective, [0.0, 0.0], jac=gradient, method='BFGS')
+        b0, b1 = float(result.x[0]), float(result.x[1])
+        self.fitted[room] = (b0, b1)
+
+        # Hessian of the negative log-posterior at the MAP estimate:
+        #   H = I_likelihood + I_prior
+        # where I_likelihood = Σ_j w_j · [1, j; j, j²]  with w_j = p̂_j(1-p̂_j)
+        # and   I_prior = τ⁻²I
+        p_hat = expit(b0 + b1 * t_arr)
+        w = p_hat * (1 - p_hat)
+
+        I = np.array([
+            [np.sum(w) + inv_tau2,         np.sum(w * t_arr)],
+            [np.sum(w * t_arr), np.sum(w * t_arr * t_arr) + inv_tau2],
+        ])
+
+        # Invert 2×2 analytically
+        det = I[0, 0] * I[1, 1] - I[0, 1] * I[1, 0]
+        if det > 1e-20:
+            self.covariance[room] = np.array([
+                [ I[1, 1], -I[0, 1]],
+                [-I[1, 0],  I[0, 0]],
+            ]) / det
+        else:
+            self.covariance[room] = np.eye(2) * self._tau2
+
+    # ── Cached quantities ────────────────────────────────────────────
+
+    def _update_cache(self):
+        """Recompute per-room probabilities, death rates, and Λ."""
+        eps = 1e-15
+        self.current_probs: dict[str, float] = {}
+        self._lambdas: dict[str, float] = {}
+
+        for room in self.room_names:
+            b0, b1 = self.fitted[room]
+            n = len(self.history[room])
+            p = float(expit(b0 + b1 * n))
+            self.current_probs[room] = p
+            self._lambdas[room] = -np.log(np.clip(p, eps, 1 - eps))
+
+        self._big_lambda = sum(self._lambdas.values())
+
+    # ── Poisson expected-time helpers ────────────────────────────────
+
+    @staticmethod
+    def _f(T: float, L: float) -> float:
+        """Expected completion time: T(e^Λ − 1)/Λ."""
+        if L < 1e-12:
+            return T
+        return T * (np.exp(L) - 1) / L
+
+    @staticmethod
+    def _df_dL(T: float, L: float) -> float:
+        """df/dΛ = T[(Λ−1)e^Λ + 1] / Λ²."""
+        if L < 1e-12:
+            return T / 2
+        return T * ((L - 1) * np.exp(L) + 1) / (L * L)
+
+    # ── UCB on priority score ────────────────────────────────────────
+
+    def _ucb_score(self, room: str) -> float:
+        """
+        Compute the upper confidence bound on the priority score
+
+            s = β₁ · λ / t
+
+        using the delta method to propagate parametric uncertainty:
+
+            ∂s/∂β₀ = −β₁(1−p) / t
+            ∂s/∂β₁ = [λ − n·β₁·(1−p)] / t
+
+            Var(s) = ∇s^T Σ ∇s
+
+        Returns s_UCB = ŝ + α · σ_s.
+        """
+        b0, b1 = self.fitted[room]
+        n = len(self.history[room])
+        t = self.times[room]
+        Sigma = self.covariance[room]
+
+        eta = b0 + b1 * n
+        p = float(expit(eta))
+        lam = -np.log(np.clip(p, 1e-15, 1 - 1e-15))
+
+        s_hat = b1 * lam / t
+
+        # Gradient of s with respect to (β₀, β₁)
+        ds_db0 = -b1 * (1.0 - p) / t
+        ds_db1 = (lam - n * b1 * (1.0 - p)) / t
+        grad = np.array([ds_db0, ds_db1])
+
+        var_s = float(grad @ Sigma @ grad)
+        sigma_s = np.sqrt(max(0.0, var_s))
+
+        return s_hat + self.alpha * sigma_s
+
+    # ── Decision logic ───────────────────────────────────────────────
+
+    def _best_training_room(self):
+        """
+        Find the room with the highest UCB score and check whether
+        training it beats attempting a full clear.
+
+        The threshold is:  df/dΛ · s_UCB > 1
+        i.e. the optimistic marginal benefit of one practice attempt
+        exceeds its cost.
+
+        Returns the room name, or None if no room is worth training.
+        """
+        df = self._df_dL(self._big_T, self._big_lambda)
+
+        best_room = None
+        best_ucb = -np.inf
+
+        for room in self.room_names:
+            ucb = self._ucb_score(room)
+            if ucb > best_ucb:
+                best_ucb = ucb
+                best_room = room
+
+        if best_room is not None and best_ucb > 0 and df * best_ucb > 1.0:
+            return best_room
+        return None
+
+    def get_next_room(self) -> str:
+        # Mid full-clear run: don't interrupt
+        if self.mode == 'full_clear' and self.current_idx > 0:
+            room = self.room_names[self.current_idx]
+            self._last_room = room
+            return room
+
+        # Re-evaluate: should we train?
+        best = self._best_training_room()
+        if best is not None:
+            self.mode = 'training'
+            self._last_room = best
+            return best
+
+        # Go for gold
+        if self.mode != 'full_clear':
+            self.mode = 'full_clear'
+            self.current_idx = 0
+        room = self.room_names[self.current_idx]
+        self._last_room = room
+        return room
+
+    def update(self, success: bool):
+        room = self._last_room
+        self.history[room].append(success)
+
+        if self.mode == 'full_clear':
+            if success:
+                self.current_idx += 1
+                if self.current_idx >= len(self.room_names):
+                    self.current_idx = 0
+            else:
+                self.current_idx = 0
+
+        # Refit only the room that just got new data
+        self._fit_room(room)
+        self._update_cache()

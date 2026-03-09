@@ -19,7 +19,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Dict, List
 from models import RoomModels, format_time
-from strategies import NaiveGrind, CyclicGrind, BackwardLearning, Semiomniscient, WindowedPractice, SemiomniscientOnline, Poisson
+from strategies import NaiveGrind, CyclicGrind, BackwardLearning, Semiomniscient, WindowedPractice, SemiomniscientOnline, Poisson, PoissonOnline
 from simulator import benchmark
 
 
@@ -31,6 +31,7 @@ _STRATEGY_TYPES = {
     'semiomniscient',
     'semiomniscient_online',
     'poisson',
+    'poisson_online',
 }
 
 
@@ -77,6 +78,8 @@ def _make_key(entry: Dict, seen_keys: Dict[str, int]) -> str:
         base = 'semiomniscient_online'
     elif t == 'poisson':
         base = 'poisson'
+    elif t == 'poisson_online':
+        base = 'poisson_online'
     else:
         base = t
 
@@ -116,6 +119,10 @@ def _build_strategy_list(entries: List[Dict], room_names: List[str], models: Roo
             strategies.append((key, SemiomniscientOnline, (room_names, models, neg_beta_threshold, stability_window, stability_eps), n_sims))
         elif t == 'poisson':
             strategies.append((key, Poisson, (room_names, models), n_sims))
+        elif t == 'poisson_online':
+            alpha = entry.get('alpha', 1.96)
+            tau = entry.get('tau', 3.0)
+            strategies.append((key, PoissonOnline, (room_names, models, alpha, tau), n_sims))
 
     return strategies
 
