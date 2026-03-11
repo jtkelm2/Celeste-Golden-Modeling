@@ -54,16 +54,16 @@ k = 20
 
 [[strategies]]
 type = "semiomniscient"
-simulations = 30
+simulations = 100
 
 [[strategies]]
 type = "semiomniscient_online"
-simulations = 30
+simulations = 100
 
 [[strategies]]
 type = "poisson"
-simulations = 30
+simulations = 100
 
 [[strategies]]
 type = "poisson_online"
-simulations = 30
+simulations = 100

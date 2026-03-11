@@ -1032,6 +1032,8 @@ def build_strategy(
     elif t == 'poisson_online':
         return PoissonOnline, (
             room_names, models,
+            float(params.get('alpha',0.4)),
+            float(params.get('tau',1.6))
         )
     else:
         raise ValueError(f"Unknown strategy type: {t!r}")
