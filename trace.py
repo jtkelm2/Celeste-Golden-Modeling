@@ -32,10 +32,7 @@ from matplotlib.lines import Line2D
 from scipy.special import expit
 
 from models import RoomModels, expected_attempt_time
-from strategies import (
-    NaiveGrind, CyclicGrind, BackwardLearning,
-    Mastery, Semiomniscient, SemiomniscientOnline,
-)
+from strategies import build_strategy, SemiomniscientOnline
 
 
 # ── Data model ────────────────────────────────────────────────────────────────
@@ -930,31 +927,6 @@ def plot_trace(steps: List[Step], models: RoomModels,
     )
 
 
-# ── Strategy factory (mirrors benchmark.py) ──────────────────────────────────
-
-def _build_strategy(strategy_type: str, params: Dict, room_names: List[str], models: RoomModels):
-    """Return (strategy_class, args_tuple) for the given type + params."""
-    t = strategy_type
-    if t == 'naive_grind':
-        return NaiveGrind, (room_names,)
-    elif t == 'cyclic_grind':
-        return CyclicGrind, (room_names,)
-    elif t == 'backward_learning':
-        chunk = int(params.get('chunk_size', 1))
-        return BackwardLearning, (room_names, chunk)
-    elif t == 'mastery':
-        k = int(params.get('k', 5))
-        return Mastery, (room_names, k)
-    elif t == 'semiomniscient':
-        return Semiomniscient, (room_names, models)
-    elif t == 'semiomniscient_online':
-        neg_thresh = float(params.get('neg_beta_threshold', 0.5))
-        window = int(params.get('stability_window', 5))
-        eps = float(params.get('stability_eps', 0.1))
-        return SemiomniscientOnline, (room_names, models, neg_thresh, window, eps)
-    else:
-        raise ValueError(f"Unknown strategy type: {t!r}")
-
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
@@ -1002,11 +974,11 @@ def main():
         sys.exit(1)
 
     models = RoomModels(model_params)
-    strategy_class, strategy_args = _build_strategy(
+    strategy_class, strategy_args = build_strategy(
         args.strategy, params, models.room_names, models
     )
 
-    strategy_instance = strategy_class(*strategy_args)
+    strategy_instance = strategy_class(*strategy_args)  # type: ignore[arg-type]
     title_prefix = strategy_instance.name
 
     print(f"Tracing: {title_prefix}")

@@ -981,3 +981,57 @@ class PoissonOnline(Strategy):
         # Refit only the room that just got new data
         self._fit_room(room)
         self._update_cache()
+
+
+# ── Strategy registry ─────────────────────────────────────────────────────────
+
+STRATEGY_TYPES = {
+    'naive_grind',
+    'cyclic_grind',
+    'backward_learning',
+    'mastery',
+    'semiomniscient',
+    'semiomniscient_online',
+    'poisson',
+    'poisson_online',
+}
+
+
+def build_strategy(
+    strategy_type: str,
+    params: dict,
+    room_names: List[str],
+    models: RoomModels,
+):
+    """Return (strategy_class, args_tuple) for the given type and params.
+
+    This is the single source of truth for constructing any strategy.
+    Both benchmark and trace delegate here so adding a new strategy only
+    requires editing this function.
+    """
+    t = strategy_type
+    if t == 'naive_grind':
+        return NaiveGrind, (room_names,)
+    elif t == 'cyclic_grind':
+        return CyclicGrind, (room_names,)
+    elif t == 'backward_learning':
+        return BackwardLearning, (room_names, int(params.get('chunk_size', 1)))
+    elif t == 'mastery':
+        return Mastery, (room_names, int(params.get('k', 5)))
+    elif t == 'semiomniscient':
+        return Semiomniscient, (room_names, models)
+    elif t == 'semiomniscient_online':
+        return SemiomniscientOnline, (
+            room_names, models,
+            float(params.get('neg_beta_threshold', 0.5)),
+            int(params.get('stability_window', 5)),
+            float(params.get('stability_eps', 0.1)),
+        )
+    elif t == 'poisson':
+        return Poisson, (room_names, models)
+    elif t == 'poisson_online':
+        return PoissonOnline, (
+            room_names, models,
+        )
+    else:
+        raise ValueError(f"Unknown strategy type: {t!r}")
