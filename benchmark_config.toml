@@ -21,34 +21,34 @@ type = "backward_learning"
 simulations = 1000
 chunk_size = 5
 
-# windowed_practice: optional k (default 5)
+# mastery: optional k (default 5)
 [[strategies]]
-type = "windowed_practice"
+type = "mastery"
 simulations = 500
 k = 3
 
 [[strategies]]
-type = "windowed_practice"
+type = "mastery"
 simulations = 500
 k = 5
 
 [[strategies]]
-type = "windowed_practice"
+type = "mastery"
 simulations = 500
 k = 7
 
 [[strategies]]
-type = "windowed_practice"
+type = "mastery"
 simulations = 500
 k = 10
 
 [[strategies]]
-type = "windowed_practice"
+type = "mastery"
 simulations = 500
 k = 15
 
 [[strategies]]
-type = "windowed_practice"
+type = "mastery"
 simulations = 500
 k = 20
 

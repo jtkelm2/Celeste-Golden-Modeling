@@ -7,7 +7,7 @@ Usage:
                     [--attempts PATH] [--times PATH] [--output-dir DIR]
 
 Strategy types: naive_grind, cyclic_grind, backward_learning,
-                windowed_practice, semiomniscient, semiomniscient_online
+                mastery, semiomniscient, semiomniscient_online
 
 Examples:
     python trace.py --strategy semiomniscient_online --seed 42
@@ -34,7 +34,7 @@ from scipy.special import expit
 from models import RoomModels, expected_attempt_time
 from strategies import (
     NaiveGrind, CyclicGrind, BackwardLearning,
-    WindowedPractice, Semiomniscient, SemiomniscientOnline,
+    Mastery, Semiomniscient, SemiomniscientOnline,
 )
 
 
@@ -201,7 +201,7 @@ def run_trace(
         mode = getattr(strategy, 'mode', 'n/a')
 
         # Generic run-start detection: any room-0 attempt in full_clear mode is a new run.
-        # Works for all strategies that use mode='full_clear' (WindowedPractice, Semiomniscient,
+        # Works for all strategies that use mode='full_clear' (Mastery, Semiomniscient,
         # SemiomniscientOnline) since all of them reset current_idx=0 on failure.
         if mode == 'full_clear' and room_to_idx.get(room, -1) == 0:
             run_id += 1
@@ -942,9 +942,9 @@ def _build_strategy(strategy_type: str, params: Dict, room_names: List[str], mod
     elif t == 'backward_learning':
         chunk = int(params.get('chunk_size', 1))
         return BackwardLearning, (room_names, chunk)
-    elif t == 'windowed_practice':
+    elif t == 'mastery':
         k = int(params.get('k', 5))
-        return WindowedPractice, (room_names, k)
+        return Mastery, (room_names, k)
     elif t == 'semiomniscient':
         return Semiomniscient, (room_names, models)
     elif t == 'semiomniscient_online':

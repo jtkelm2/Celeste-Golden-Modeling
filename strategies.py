@@ -116,7 +116,7 @@ class BackwardLearning(Strategy):
             self.current_idx = self.sequence_start
 
 
-class WindowedPractice(Strategy):
+class Mastery(Strategy):
     """
     Practice each room in isolation until K consecutive successes are achieved,
     then move on. Once all rooms meet the threshold, switch to full clear attempts.
@@ -136,7 +136,7 @@ class WindowedPractice(Strategy):
 
     @property
     def name(self) -> str:
-        return f"Windowed Practice (K={self.k})"
+        return f"Mastery (K={self.k})"
 
     def _pick_next_training_room(self):
         """Pick the next unmastered room to train. Returns False if all mastered."""

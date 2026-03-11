@@ -19,7 +19,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Dict, List
 from models import RoomModels, format_time
-from strategies import NaiveGrind, CyclicGrind, BackwardLearning, Semiomniscient, WindowedPractice, SemiomniscientOnline, Poisson, PoissonOnline
+from strategies import NaiveGrind, CyclicGrind, BackwardLearning, Semiomniscient, Mastery, SemiomniscientOnline, Poisson, PoissonOnline
 from simulator import benchmark
 
 
@@ -27,7 +27,7 @@ _STRATEGY_TYPES = {
     'naive_grind',
     'cyclic_grind',
     'backward_learning',
-    'windowed_practice',
+    'mastery',
     'semiomniscient',
     'semiomniscient_online',
     'poisson',
@@ -70,8 +70,8 @@ def _make_key(entry: Dict, seen_keys: Dict[str, int]) -> str:
     elif t == 'backward_learning':
         chunk = entry.get('chunk_size', 1)
         base = 'backward' if chunk == 1 else f'backward_{chunk}'
-    elif t == 'windowed_practice':
-        base = f"windowed_{entry.get('k', 5)}"
+    elif t == 'mastery':
+        base = f"mastery_{entry.get('k', 5)}"
     elif t == 'semiomniscient':
         base = 'semiomniscient'
     elif t == 'semiomniscient_online':
@@ -107,9 +107,9 @@ def _build_strategy_list(entries: List[Dict], room_names: List[str], models: Roo
         elif t == 'backward_learning':
             chunk = entry.get('chunk_size', 1)
             strategies.append((key, BackwardLearning, (room_names, chunk), n_sims))
-        elif t == 'windowed_practice':
+        elif t == 'mastery':
             k = entry.get('k', 5)
-            strategies.append((key, WindowedPractice, (room_names, k), n_sims))
+            strategies.append((key, Mastery, (room_names, k), n_sims))
         elif t == 'semiomniscient':
             strategies.append((key, Semiomniscient, (room_names, models), n_sims))
         elif t == 'semiomniscient_online':
@@ -182,12 +182,12 @@ def run_benchmark(
     print(f"  Time: {format_time(actual_time)}")
     print()
 
-    # Derive window K values from config for the sweep plot
-    window_ks = [e.get('k', 5) for e in entries if e['type'] == 'windowed_practice']
+    # Derive mastery K values from config for the sweep plot
+    window_ks = [e.get('k', 5) for e in entries if e['type'] == 'mastery']
 
     # Generate plots
     _create_plots(results, actual_time, actual_attempts, room_names, plots_dir)
-    _create_windowed_sweep_plot(results, window_ks, plots_dir)
+    _create_mastery_sweep_plot(results, window_ks, plots_dir)
 
     # Save results
     results_file = os.path.join(data_dir, 'benchmark_results.json')
@@ -219,18 +219,18 @@ def run_benchmark(
     return results
 
 
-def _create_windowed_sweep_plot(
+def _create_mastery_sweep_plot(
     results: Dict,
     window_ks: List[int],
     plots_dir: str
 ):
-    """Create a plot showing mean completion time as a function of K for windowed practice."""
+    """Create a plot showing mean completion time as a function of K for mastery practice."""
     ks = []
     means = []
     stds = []
 
     for k in window_ks:
-        key = f'windowed_{k}'
+        key = f'mastery_{k}'
         if key not in results:
             continue
         ks.append(k)
@@ -268,17 +268,17 @@ def _create_windowed_sweep_plot(
 
     ax.set_xlabel('K (consecutive successes required)', fontsize=12, fontweight='bold')
     ax.set_ylabel('Mean Time to Completion (hours)', fontsize=12, fontweight='bold')
-    ax.set_title('Windowed Practice: Effect of K on Completion Time',
+    ax.set_title('Mastery: Effect of K on Completion Time',
                  fontsize=14, fontweight='bold')
     ax.set_xticks(ks)
     ax.legend(loc='best')
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'windowed_k_sweep.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(plots_dir, 'mastery_k_sweep.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
-    print(f"Saved windowed K sweep plot to {plots_dir}/windowed_k_sweep.png")
+    print(f"Saved mastery K sweep plot to {plots_dir}/mastery_k_sweep.png")
 
 
 def _create_plots(
