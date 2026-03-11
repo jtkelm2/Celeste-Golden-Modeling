@@ -8,6 +8,8 @@ from typing import List
 import numpy as np
 from scipy.special import expit
 from models import RoomModels, expected_attempt_time
+import numpy as np
+from scipy.optimize import minimize as sp_minimize
 
 
 class Strategy(ABC):
@@ -542,8 +544,6 @@ def _fit_logistic_mle(attempts: List[bool]) -> tuple:
     Fit logistic regression via MLE, matching the mod's BFGS approach.
     Returns (beta0, beta1).
     """
-    import numpy as np
-    from scipy.optimize import minimize as sp_minimize
 
     n = len(attempts)
     t = np.arange(n, dtype=float)
@@ -744,8 +744,7 @@ class PoissonOnline(Strategy):
         models:     RoomModels (used ONLY for room times; true β
                     parameters are never accessed).
         alpha:      UCB exploration parameter.  Higher values drive more
-                    exploration.  α = 1.96 corresponds to a 95% one-
-                    sided confidence bound.
+                    exploration.
         tau:        Prior standard deviation on (β₀, β₁).  Controls
                     regularisation strength and initial uncertainty.
                     Larger τ = weaker prior = more initial exploration.
@@ -755,7 +754,7 @@ class PoissonOnline(Strategy):
         self,
         room_names: List[str],
         models: RoomModels,
-        alpha: float = 1.96,
+        alpha: float = 0.6,
         tau: float = 3.0,
     ):
         self.room_names = room_names
@@ -791,9 +790,12 @@ class PoissonOnline(Strategy):
 
     def _fit_room(self, room: str):
         """
-        Fit a regularised logistic model (MAP under a N(0, τ²I) prior)
-        and compute the posterior covariance via the Laplace
-        approximation: Σ = (I_observed + τ⁻²I)⁻¹.
+        Update the regularised logistic model for a room after a new
+        observation.
+
+        Performs a single Newton-Raphson step on the log-
+        posterior — one gradient + Hessian evaluation instead of
+        iterating BFGS to convergence.
         """
         attempts = self.history[room]
         n = len(attempts)
@@ -807,45 +809,45 @@ class PoissonOnline(Strategy):
         y = np.array([1.0 if a else 0.0 for a in attempts])
         inv_tau2 = 1.0 / self._tau2
 
-        def objective(params):
-            b0, b1 = params
-            p = expit(b0 + b1 * t_arr)
-            p = np.clip(p, 1e-10, 1 - 1e-10)
-            nll = -np.sum(y * np.log(p) + (1 - y) * np.log(1 - p))
-            return nll + 0.5 * inv_tau2 * (b0 * b0 + b1 * b1)
+        
+        # Single Newton-Raphson step: θ ← θ − H⁻¹∇
+        b0, b1 = self.fitted[room]
+        p_hat = expit(b0 + b1 * t_arr)
+        r = p_hat - y
 
-        def gradient(params):
-            b0, b1 = params
-            p = expit(b0 + b1 * t_arr)
-            r = p - y
-            return np.array([
-                np.sum(r) + inv_tau2 * b0,
-                np.sum(r * t_arr) + inv_tau2 * b1,
-            ])
+        grad = np.array([
+            np.sum(r) + inv_tau2 * b0,
+            np.sum(r * t_arr) + inv_tau2 * b1,
+        ])
 
-        from scipy.optimize import minimize as sp_minimize
-        result = sp_minimize(objective, [0.0, 0.0], jac=gradient, method='BFGS')
-        b0, b1 = float(result.x[0]), float(result.x[1])
+        w = p_hat * (1 - p_hat)
+        H00 = np.sum(w) + inv_tau2
+        H01 = np.sum(w * t_arr)
+        H11 = np.sum(w * t_arr * t_arr) + inv_tau2
+        det = H00 * H11 - H01 * H01
+
+        if det > 1e-20:
+            # H⁻¹ ∇  (inline 2×2 solve)
+            step0 = ( H11 * grad[0] - H01 * grad[1]) / det
+            step1 = (-H01 * grad[0] + H00 * grad[1]) / det
+            b0 -= step0
+            b1 = max(0.0, b1 - step1)  # projected Newton: β₁ ≥ 0
+
         self.fitted[room] = (b0, b1)
 
-        # Hessian of the negative log-posterior at the MAP estimate:
-        #   H = I_likelihood + I_prior
-        # where I_likelihood = Σ_j w_j · [1, j; j, j²]  with w_j = p̂_j(1-p̂_j)
-        # and   I_prior = τ⁻²I
+        # Posterior covariance: (H_lik + H_prior)⁻¹
         p_hat = expit(b0 + b1 * t_arr)
         w = p_hat * (1 - p_hat)
 
-        I = np.array([
-            [np.sum(w) + inv_tau2,         np.sum(w * t_arr)],
-            [np.sum(w * t_arr), np.sum(w * t_arr * t_arr) + inv_tau2],
-        ])
+        I00 = np.sum(w) + inv_tau2
+        I01 = np.sum(w * t_arr)
+        I11 = np.sum(w * t_arr * t_arr) + inv_tau2
+        det = I00 * I11 - I01 * I01
 
-        # Invert 2×2 analytically
-        det = I[0, 0] * I[1, 1] - I[0, 1] * I[1, 0]
         if det > 1e-20:
             self.covariance[room] = np.array([
-                [ I[1, 1], -I[0, 1]],
-                [-I[1, 0],  I[0, 0]],
+                [ I11, -I01],
+                [-I01,  I00],
             ]) / det
         else:
             self.covariance[room] = np.eye(2) * self._tau2
@@ -891,12 +893,7 @@ class PoissonOnline(Strategy):
 
             s = β₁ · λ / t
 
-        using the delta method to propagate parametric uncertainty:
-
-            ∂s/∂β₀ = −β₁(1−p) / t
-            ∂s/∂β₁ = [λ − n·β₁·(1−p)] / t
-
-            Var(s) = ∇s^T Σ ∇s
+        using the delta method to propagate parametric uncertainty.
 
         Returns s_UCB = ŝ + α · σ_s.
         """
@@ -911,8 +908,9 @@ class PoissonOnline(Strategy):
 
         s_hat = b1 * lam / t
 
-        # Gradient of s with respect to (β₀, β₁)
+        # ∂s/∂β₀ = −β₁(1−p) / t
         ds_db0 = -b1 * (1.0 - p) / t
+        # ∂s/∂β₁ = [λ − n·β₁·(1−p)] / t
         ds_db1 = (lam - n * b1 * (1.0 - p)) / t
         grad = np.array([ds_db0, ds_db1])
 
@@ -928,10 +926,6 @@ class PoissonOnline(Strategy):
         Find the room with the highest UCB score and check whether
         training it beats attempting a full clear.
 
-        The threshold is:  df/dΛ · s_UCB > 1
-        i.e. the optimistic marginal benefit of one practice attempt
-        exceeds its cost.
-
         Returns the room name, or None if no room is worth training.
         """
         df = self._df_dL(self._big_T, self._big_lambda)
@@ -945,6 +939,7 @@ class PoissonOnline(Strategy):
                 best_ucb = ucb
                 best_room = room
 
+        # Train iff df/dΛ · s_UCB > 1  (optimistic benefit > cost)
         if best_room is not None and best_ucb > 0 and df * best_ucb > 1.0:
             return best_room
         return None
