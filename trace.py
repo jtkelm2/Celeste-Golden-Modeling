@@ -964,8 +964,8 @@ def main():
         k, v = kv.split('=', 1)
         params[k.strip()] = v.strip()
 
-    # Load model parameters (from data/ if available, else run analysis inline)
-    model_params_file = os.path.join('data', 'model_parameters.json')
+    # Load model parameters
+    model_params_file = os.path.join('parameters', 'model_parameters.json')
     if os.path.exists(model_params_file):
         with open(model_params_file) as f:
             model_params = json.load(f)

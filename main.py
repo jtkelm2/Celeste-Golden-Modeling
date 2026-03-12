@@ -3,11 +3,16 @@
 Celeste Golden Run Analysis and Strategy Benchmarking
 
 Usage:
-    python main.py [--attempts PATH] [--times PATH] [--analyze] [--benchmark]
-                   [--benchmark-config PATH]
-    python main.py --benchmark --models "data/synthetic/*.json" [--workers N]
+    python main.py [--analyze] [--benchmark] [--no-plot] [--job-name NAME]
+    python main.py --benchmark --models "parameters/synthetic/job_000/*.json" [--workers N]
 
 If neither --analyze nor --benchmark is specified, both are run.
+--plot is enabled by default; pass --no-plot to skip plot generation.
+
+Each benchmark or batch job writes into a unique subdirectory:
+  results/job_NNN/   (or results/<job-name>/)
+  plots/job_NNN/     (or plots/<job-name>/)
+
 Strategy selection and simulation counts are controlled via benchmark_config.toml.
 List-valued strategy parameters in the config are automatically expanded into sweeps.
 """
@@ -16,6 +21,19 @@ import argparse
 import glob as glob_module
 import os
 import sys
+
+
+def _next_job_name(base_dir: str) -> str:
+    """Return the lowest available job_NNN name within base_dir."""
+    existing = set()
+    if os.path.isdir(base_dir):
+        for name in os.listdir(base_dir):
+            if name.startswith('job_') and name[4:].isdigit():
+                existing.add(int(name[4:]))
+    n = 0
+    while n in existing:
+        n += 1
+    return f'job_{n:03d}'
 
 
 def main():
@@ -43,6 +61,18 @@ def main():
         help='Run strategy benchmarks'
     )
     parser.add_argument(
+        '--plot',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='Generate plots after benchmarking (default: enabled)'
+    )
+    parser.add_argument(
+        '--job-name',
+        default=None,
+        metavar='NAME',
+        help='Job subdirectory name for results and plots (default: auto job_NNN)'
+    )
+    parser.add_argument(
         '--benchmark-config',
         default='benchmark_config.toml',
         metavar='PATH',
@@ -53,7 +83,7 @@ def main():
         nargs='+',
         metavar='PATH',
         help='Model parameter files for batch benchmarking (globs supported). '
-             'Results are saved alongside each input file as <stem>_benchmark.json.'
+             'Results are saved into results/<job>/.'
     )
     parser.add_argument(
         '--workers',
@@ -85,8 +115,22 @@ def main():
             print("Error: no model files found.")
             sys.exit(1)
 
+        job_name = args.job_name or _next_job_name('results')
+        results_dir = os.path.join('results', job_name)
+        plots_base_dir = os.path.join('plots', job_name)
+
         from benchmark import run_batch
-        run_batch(model_paths, config_path=args.benchmark_config, workers=args.workers)
+        result_paths = run_batch(
+            model_paths,
+            results_dir=results_dir,
+            config_path=args.benchmark_config,
+            workers=args.workers,
+        )
+
+        if args.plot:
+            from plot import plot_batch
+            plot_batch(result_paths, plots_base_dir=plots_base_dir)
+
         return
 
     # ── Single-model mode ─────────────────────────────────────────────────────
@@ -101,9 +145,8 @@ def main():
     run_analyze = args.analyze or (not args.analyze and not args.benchmark)
     do_benchmark = args.benchmark or (not args.analyze and not args.benchmark)
 
-    data_dir = 'data'
+    parameters_dir = 'parameters'
     analysis_plots_dir = 'plots/analysis'
-    benchmark_plots_dir = 'plots/benchmark'
 
     model_params = None
 
@@ -112,7 +155,7 @@ def main():
         model_params = run_analysis(
             args.attempts,
             args.times,
-            data_dir,
+            parameters_dir,
             analysis_plots_dir
         )
         print()
@@ -122,19 +165,27 @@ def main():
         from benchmark import run_benchmark
 
         if model_params is None:
-            params_file = os.path.join(data_dir, 'model_parameters.json')
+            params_file = os.path.join(parameters_dir, 'model_parameters.json')
             if not os.path.exists(params_file):
                 print("Error: Model parameters not found. Run --analyze first.")
                 sys.exit(1)
             with open(params_file, 'r') as f:
                 model_params = json.load(f)
 
+        job_name = args.job_name or _next_job_name('results')
+        results_dir = os.path.join('results', job_name)
+        benchmark_plots_dir = os.path.join('plots', 'benchmark', job_name)
+
         run_benchmark(
             model_params,
-            benchmark_plots_dir,
-            data_dir,
+            results_dir,
             config_path=args.benchmark_config,
         )
+
+        if args.plot:
+            from plot import plot_results
+            results_file = os.path.join(results_dir, 'benchmark_results.json')
+            plot_results(results_file, benchmark_plots_dir)
 
 
 if __name__ == '__main__':

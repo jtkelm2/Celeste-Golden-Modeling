@@ -5,6 +5,7 @@ Fit logistic models to Celeste attempt data and generate visualizations.
 
 import json
 import os
+import shutil
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.special import expit
@@ -83,7 +84,9 @@ def run_analysis(attempts_path: str, times_path: str, data_dir: str, plots_dir: 
         data_dir: Output directory for model parameters
         plots_dir: Output directory for plots
     """
-    os.makedirs(plots_dir, exist_ok=True)
+    if os.path.isdir(plots_dir):
+        shutil.rmtree(plots_dir)
+    os.makedirs(plots_dir)
     os.makedirs(data_dir, exist_ok=True)
     
     with open(attempts_path, 'r') as f:
