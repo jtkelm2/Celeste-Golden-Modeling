@@ -58,7 +58,8 @@ def benchmark(
     strategy_class: Type[Strategy],
     strategy_args: tuple,
     models: RoomModels,
-    n_simulations: int
+    n_simulations: int,
+    verbose: bool = True,
 ) -> Dict:
     """
     Run Monte Carlo benchmark of a strategy.
@@ -71,7 +72,7 @@ def benchmark(
     n_simulations_checkpoint = n_simulations // 10
     
     for i in range(n_simulations):
-        if i > 0 and i % n_simulations_checkpoint == 0:
+        if verbose and i > 0 and i % n_simulations_checkpoint == 0:
             print(f"  Completed {i}/{n_simulations} simulations...")
 
         strategy = strategy_class(*strategy_args)

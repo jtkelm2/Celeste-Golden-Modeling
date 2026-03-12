@@ -14,10 +14,12 @@ except ModuleNotFoundError:
         )
 
 import json
+import multiprocessing
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Dict, List
+from collections import defaultdict
+from typing import Dict, List, Optional
 from models import RoomModels, format_time
 from strategies import build_strategy, STRATEGY_TYPES
 from simulator import benchmark
@@ -48,6 +50,33 @@ def _load_config(config_path: str) -> List[Dict]:
     return entries
 
 
+def _expand_entries(entries: List[Dict]) -> List[Dict]:
+    """
+    Expand list-valued strategy parameters into multiple entries.
+
+    E.g. k = [3, 5, 7] becomes three separate entries with k=3, k=5, k=7.
+    Only one parameter per entry may be a list; multiple list params raise an error.
+    """
+    expanded = []
+    for entry in entries:
+        list_params = {
+            k: v for k, v in entry.items()
+            if k not in ('type', 'simulations') and isinstance(v, list)
+        }
+        if len(list_params) > 1:
+            raise ValueError(
+                f"Strategy entry ({entry['type']}) has multiple list-valued params "
+                f"{list(list_params.keys())}; only one sweep dimension per entry is supported."
+            )
+        if not list_params:
+            expanded.append(entry)
+        else:
+            param, values = next(iter(list_params.items()))
+            for v in values:
+                expanded.append({**entry, param: v})
+    return expanded
+
+
 def run_benchmark(
     model_params: Dict,
     plots_dir: str,
@@ -66,13 +95,17 @@ def run_benchmark(
     os.makedirs(plots_dir, exist_ok=True)
     os.makedirs(data_dir, exist_ok=True)
 
-    entries = _load_config(config_path)
+    entries = _expand_entries(_load_config(config_path))
     models = RoomModels(model_params)
     room_names = models.room_names
 
-    # Actual results from data
-    actual_time = sum(model_params[r]['total_time'] for r in room_names)
-    actual_attempts = {r: model_params[r]['total_attempts'] for r in room_names}
+    # Actual results from data — optional, absent for synthetic models
+    has_actual = all(
+        'total_time' in model_params[r] and 'total_attempts' in model_params[r]
+        for r in room_names
+    )
+    actual_time = sum(model_params[r]['total_time'] for r in room_names) if has_actual else None
+    actual_attempts = {r: model_params[r]['total_attempts'] for r in room_names} if has_actual else None
 
     total_sims = sum(e['simulations'] for e in entries)
     print(f"{'=' * 60}")
@@ -101,9 +134,10 @@ def run_benchmark(
         print(f"  Mean time: {format_time(r['mean_time'])} ± {format_time(r['std_time'])}")
         print()
 
-    print(f"Actual results:")
-    print(f"  Time: {format_time(actual_time)}")
-    print()
+    if actual_time is not None:
+        print(f"Actual results:")
+        print(f"  Time: {format_time(actual_time)}")
+        print()
 
     # Generate plots
     _create_plots(results, actual_time, actual_attempts, room_names, plots_dir)
@@ -111,7 +145,7 @@ def run_benchmark(
 
     # Save results
     results_file = os.path.join(data_dir, 'benchmark_results.json')
-    save_results = {
+    save_results: Dict = {
         'strategies': [
             {
                 'strategy': r['strategy'],
@@ -121,11 +155,12 @@ def run_benchmark(
             }
             for r in results
         ],
-        'actual': {
+    }
+    if actual_time is not None:
+        save_results['actual'] = {
             'total_time': actual_time,
             'attempts_per_room': actual_attempts,
-        },
-    }
+        }
 
     with open(results_file, 'w') as f:
         json.dump(save_results, f, indent=2)
@@ -135,11 +170,92 @@ def run_benchmark(
     best = min(results, key=lambda r: r['mean_time'])
     print(f"🏆 WINNER: {best['strategy']}")
     print(f"   Expected: {format_time(best['mean_time'])}")
-    print(f"   Actual:   {format_time(actual_time)}")
+    if actual_time is not None:
+        print(f"   Actual:   {format_time(actual_time)}")
     print("=" * 60)
 
     return results
 
+
+# ── Batch / parallel ──────────────────────────────────────────────────────────
+
+def _run_batch_cell(job):
+    """Worker function for parallel batch benchmarking (must be module-level for pickling)."""
+    model_path, model_params, entry = job
+    try:
+        models = RoomModels(model_params)
+        room_names = models.room_names
+        cls, args = build_strategy(entry['type'], entry, room_names, models)
+        result = benchmark(cls, args, models, entry['simulations'], verbose=False)
+        return model_path, result
+    except Exception as e:
+        return model_path, {'error': str(e), 'strategy': str(entry)}
+
+
+def run_batch(
+    model_paths: List[str],
+    config_path: str = 'benchmark_config.toml',
+    workers: Optional[int] = None,
+):
+    """
+    Run benchmarks for multiple model files in parallel.
+    Saves one <stem>_benchmark.json alongside each input model file.
+
+    Args:
+        model_paths:  List of paths to model_parameters JSON files.
+        config_path:  Path to TOML benchmark config.
+        workers:      Worker process count (default: CPU count).
+    """
+    entries = _expand_entries(_load_config(config_path))
+
+    loaded = []
+    for path in model_paths:
+        with open(path) as f:
+            params = json.load(f)
+        loaded.append((path, params))
+
+    jobs = [(path, params, entry) for path, params in loaded for entry in entries]
+    total = len(jobs)
+    n_workers = workers or os.cpu_count()
+
+    print(f"Batch: {len(loaded)} models × {len(entries)} configs = {total} jobs on {n_workers} workers")
+
+    results_by_path: Dict[str, List] = defaultdict(list)
+    with multiprocessing.Pool(n_workers) as pool:
+        checkpoint = max(1, total // 20)
+        for done, (model_path, result) in enumerate(
+            pool.imap_unordered(_run_batch_cell, jobs), 1
+        ):
+            results_by_path[model_path].append(result)
+            if done % checkpoint == 0 or done == total:
+                print(f"  {done}/{total} jobs complete")
+
+    for path, _params in loaded:
+        stem = os.path.splitext(path)[0]
+        out_path = stem + '_benchmark.json'
+        results = results_by_path[path]
+        save = {
+            'strategies': [
+                {
+                    'strategy': r['strategy'],
+                    'mean_time': r['mean_time'],
+                    'std_time': r['std_time'],
+                    'room_attempts': r['room_attempts'],
+                }
+                for r in results
+                if 'error' not in r
+            ]
+        }
+        errors = [r for r in results if 'error' in r]
+        if errors:
+            save['errors'] = errors
+        with open(out_path, 'w') as f:
+            json.dump(save, f, indent=2)
+
+    print(f"Saved {len(loaded)} result file(s) alongside model files.")
+
+
+# ── Plots ─────────────────────────────────────────────────────────────────────
 
 def _create_mastery_sweep_plot(
     results: List[Dict],
@@ -195,8 +311,8 @@ def _create_mastery_sweep_plot(
 
 def _create_plots(
     results: List[Dict],
-    actual_time: float,
-    actual_attempts: Dict[str, int],
+    actual_time: Optional[float],
+    actual_attempts: Optional[Dict[str, int]],
     room_names: List[str],
     plots_dir: str
 ):
@@ -217,8 +333,6 @@ def _create_plots(
     x_max = max(t.max() for t in all_times_hours)
     x_pad = (x_max - x_min) * 0.05
     xs = np.linspace(x_min - x_pad, x_max + x_pad, 500)
-
-    actual_hours = actual_time / 3600
 
     # Compute KDEs and find global max density for uniform scaling
     kdes = []
@@ -259,10 +373,12 @@ def _create_plots(
                 color=color)
 
     y_top = n_strategies * ridge_height * (1 - overlap) + ridge_height
-    ax.plot([actual_hours, actual_hours], [0, y_top],
-            color='black', linestyle='--', linewidth=2, zorder=10)
-    ax.text(actual_hours, y_top * 1.01, f'Actual ({format_time(actual_time)})',
-            ha='center', va='bottom', fontsize=10, fontweight='bold')
+    if actual_time is not None:
+        actual_hours = actual_time / 3600
+        ax.plot([actual_hours, actual_hours], [0, y_top],
+                color='black', linestyle='--', linewidth=2, zorder=10)
+        ax.text(actual_hours, y_top * 1.01, f'Actual ({format_time(actual_time)})',
+                ha='center', va='bottom', fontsize=10, fontweight='bold')
 
     ax.set_xlabel('Time to Completion (hours)', fontsize=12, fontweight='bold')
     ax.set_title('Time Distribution Comparison', fontsize=14, fontweight='bold', pad=15)
@@ -289,7 +405,10 @@ def _create_plots(
         bar_colors[idx] = plt.colormaps['RdYlGn_r'](rank / (len(mean_times) - 1) * 0.6 + 0.2)
 
     bars = ax.bar(x, mean_times, yerr=std_times, alpha=0.8, capsize=5, color=bar_colors)
-    ax.axhline(actual_hours, color='black', linestyle='--', linewidth=2, label=f'Actual ({format_time(actual_time)})')
+    if actual_time is not None:
+        actual_hours = actual_time / 3600
+        ax.axhline(actual_hours, color='black', linestyle='--', linewidth=2,
+                   label=f'Actual ({format_time(actual_time)})')
 
     for i, (bar, mean, std) in enumerate(zip(bars, mean_times, std_times)):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std_times[i] * 1.04,
@@ -299,7 +418,8 @@ def _create_plots(
     ax.set_xticklabels(strategy_names, rotation=45, ha='right')
     ax.set_ylabel('Time (hours)', fontweight='bold')
     ax.set_title('Mean Time to Completion', fontweight='bold', fontsize=14)
-    ax.legend()
+    if actual_time is not None:
+        ax.legend()
     ax.grid(True, alpha=0.3, axis='y')
 
     plt.tight_layout()
@@ -315,8 +435,9 @@ def _create_plots(
         x = np.arange(len(strategy_names))
 
         bars = ax.bar(x, means, yerr=stds, alpha=0.7, capsize=5, color='steelblue')
-        ax.axhline(actual_attempts[room], color='black', linestyle='--', linewidth=2,
-                   label=f'Actual ({actual_attempts[room]})')
+        if actual_attempts is not None:
+            ax.axhline(actual_attempts[room], color='black', linestyle='--', linewidth=2,
+                       label=f'Actual ({actual_attempts[room]})')
 
         for i, (bar, mean, std) in enumerate(zip(bars, means, stds)):
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std + 1,
@@ -326,7 +447,8 @@ def _create_plots(
         ax.set_xticklabels(strategy_names, rotation=45, ha='right')
         ax.set_ylabel('Attempts', fontweight='bold')
         ax.set_title(f'Room {room}: Attempts per Strategy', fontweight='bold', fontsize=14)
-        ax.legend()
+        if actual_attempts is not None:
+            ax.legend()
         ax.grid(True, alpha=0.3, axis='y')
 
         plt.tight_layout()
